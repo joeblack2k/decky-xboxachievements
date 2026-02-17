@@ -1,0 +1,13 @@
+{
+  "name": "Xbox Achievements",
+  "author": "nijssen",
+  "description": "Port van SAN Xbox style notificaties voor Steam Deck.",
+  "version": "1.0.0",
+  "flags": [],
+  "api_version": 1,
+  "publish": {
+    "tags": ["style", "xbox", "achievement"],
+    "resourceLink": "https://github.com/SteamAchievementNotifier/SteamAchievementNotifier"
+  },
+  "main": "main.py"
+}
