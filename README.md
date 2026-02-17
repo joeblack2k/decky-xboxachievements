@@ -39,3 +39,8 @@ Deploy helper:
 - Backend methods include `test_popup_main`, `test_popup_rare`, and `get_status`.
 - The current implementation is intentionally API-free (local detection only).
 - Audio files shipped in this repository are original plugin sounds generated for this project.
+
+## AI Disclosure
+
+Parts of this plugin were developed with AI-assisted coding support.
+All generated code and content were manually reviewed, edited, and tested before publication.
