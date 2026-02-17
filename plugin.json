@@ -1,13 +1,15 @@
 {
   "name": "Xbox Achievements",
   "author": "nijssen",
-  "description": "Port van SAN Xbox style notificaties voor Steam Deck.",
+  "description": "Xbox-style achievement notifications for Steam Deck.",
   "version": "1.0.0",
   "flags": [],
   "api_version": 1,
   "publish": {
-    "tags": ["style", "xbox", "achievement"],
-    "resourceLink": "https://github.com/SteamAchievementNotifier/SteamAchievementNotifier"
+    "tags": ["style", "xbox", "achievement", "notification"],
+    "description": "Xbox-style achievement popup notifications with separate normal and rare sounds.",
+    "image": "https://opengraph.githubassets.com/1/joeblack2k/decky-xboxachievements",
+    "resourceLink": "https://github.com/joeblack2k/decky-xboxachievements"
   },
   "main": "main.py"
 }

@@ -4,7 +4,7 @@ Decky Loader plugin that displays Xbox-style achievement popups on Steam Deck an
 
 ## Features
 
-- Xbox/SAN-inspired popup animation and styling
+- Xbox-inspired popup animation and styling
 - Separate `unlock.wav` and `rare.wav` playback
 - Conservative local achievement detection (Steam logs + library cache watcher)
 - Manual test buttons for normal and rare popups
@@ -38,3 +38,4 @@ Deploy helper:
 - The plugin emits frontend event `xboxachievements_show`.
 - Backend methods include `test_popup_main`, `test_popup_rare`, and `get_status`.
 - The current implementation is intentionally API-free (local detection only).
+- Audio files shipped in this repository are original plugin sounds generated for this project.
