@@ -3,7 +3,7 @@
   inset: 0;
   display: grid;
   place-items: end center;
-  padding-bottom: 108px;
+  padding-bottom: 72px;
   pointer-events: none;
   z-index: 2147483000;
 }
@@ -50,11 +50,10 @@
   position: absolute;
   top: 50%;
   left: 50%;
-  translate: -145% -50%;
   width: 28vw;
   max-width: 240px;
   height: calc(var(--notifyheight) * 2);
-  transform: skew(-28deg, 0deg);
+  transform: translate(-145%, -50%) skew(-28deg, 0deg);
   background: white;
   filter: blur(30px);
   opacity: 0;
@@ -67,7 +66,7 @@
   margin-left: 6px;
   border-radius: 28px;
   background: linear-gradient(140deg, #1b8f1a, #116010);
-  scale: 0;
+  transform: scale(0);
   transform-origin: center;
   animation: xboxachv-iconbg-seq var(--displaytime) linear both;
 }
@@ -141,34 +140,50 @@
 }
 
 .xboxachv-achcontent {
-  display: grid;
-  align-content: center;
-  row-gap: 1px;
-  min-width: 0;
-  margin-left: 10px;
-  margin-right: 12px;
+  position: absolute;
+  inset: 0 24px 0 76px;
   color: #f0fbf0;
   text-shadow: 0 1px 1px rgba(0, 0, 0, 0.5);
   font-family: "Segoe UI", "Noto Sans", "Roboto", sans-serif;
+  text-align: center;
 }
 
 .xboxachv-achcontent > span {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.xboxachv-unlockmsg,
-.xboxachv-title {
+.xboxachv-unlockmsg {
+  white-space: nowrap;
   opacity: 0;
-  transform: translateY(18px);
+  transform: translateY(calc(-50% + 18px));
   animation: xboxachv-toptext-seq var(--displaytime) linear both;
 }
 
 .xboxachv-unlockmsg {
   font-size: 12px;
   color: rgba(255, 255, 255, 0.95);
+}
+
+.xboxachv-detail {
+  display: grid;
+  align-content: center;
+  row-gap: 1px;
+  opacity: 0;
+  transform: translateY(calc(-50% + 18px));
+  animation: xboxachv-detail-seq var(--displaytime) linear both;
+}
+
+.xboxachv-detail > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .xboxachv-title {
@@ -178,19 +193,6 @@
 
 .xboxachv-desc {
   font-size: 12px;
-  opacity: 0;
-  transform: translateY(110%);
-  animation: xboxachv-desc-seq var(--displaytime) linear both;
-}
-
-.xboxachv-time {
-  position: absolute;
-  right: 14px;
-  bottom: 7px;
-  font-size: 10px;
-  color: rgba(255, 255, 255, 0.7);
-  opacity: 0;
-  animation: xboxachv-time-seq var(--displaytime) linear both;
 }
 
 .xboxachv-rare .xboxachv-bg {
@@ -249,31 +251,31 @@
 
 @keyframes xboxachv-overlay-sweep {
   0% {
-    translate: -145% -50%;
+    transform: translate(-145%, -50%) skew(-28deg, 0deg);
     opacity: 0;
   }
   45% {
-    translate: 0 -50%;
+    transform: translate(0, -50%) skew(-28deg, 0deg);
     opacity: 0.24;
   }
   100% {
-    translate: 110% -50%;
+    transform: translate(110%, -50%) skew(-28deg, 0deg);
     opacity: 0;
   }
 }
 
 @keyframes xboxachv-iconbg-seq {
   0% {
-    scale: 0;
+    transform: scale(0);
   }
   10% {
-    scale: 1;
+    transform: scale(1);
   }
   84% {
-    scale: 1;
+    transform: scale(1);
   }
   100% {
-    scale: 0;
+    transform: scale(0);
   }
 }
 
@@ -299,64 +301,46 @@
 @keyframes xboxachv-toptext-seq {
   0% {
     opacity: 0;
-    transform: translateY(18px);
+    transform: translateY(calc(-50% + 18px));
   }
   30% {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(-50%);
   }
   48% {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(-50%);
   }
   58% {
     opacity: 0;
-    transform: translateY(-18px);
+    transform: translateY(calc(-50% - 18px));
   }
   100% {
     opacity: 0;
-    transform: translateY(-18px);
+    transform: translateY(calc(-50% - 18px));
   }
 }
 
-@keyframes xboxachv-desc-seq {
+@keyframes xboxachv-detail-seq {
   0% {
     opacity: 0;
-    transform: translateY(110%);
+    transform: translateY(calc(-50% + 18px));
   }
   42% {
     opacity: 0;
-    transform: translateY(110%);
+    transform: translateY(calc(-50% + 18px));
   }
   58% {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(-50%);
   }
   84% {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(-50%);
   }
   100% {
     opacity: 0;
-    transform: translateY(-18px);
-  }
-}
-
-@keyframes xboxachv-time-seq {
-  0% {
-    opacity: 0;
-  }
-  58% {
-    opacity: 0;
-  }
-  68% {
-    opacity: 1;
-  }
-  90% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0;
+    transform: translateY(calc(-50% - 18px));
   }
 }
 

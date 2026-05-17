@@ -4,7 +4,6 @@ import {
   definePlugin,
   removeEventListener,
   routerHook,
-  toaster,
 } from "@decky/api";
 import {
   ButtonItem,
@@ -18,7 +17,6 @@ import XboxNotification, { type NotificationPayload } from "./XboxNotification";
 
 const GLOBAL_COMPONENT_NAME = "XboxAchievementsOverlay";
 const EVENT_NAME = "xboxachievements_show";
-let overlayToastListener: ((payload: NotificationPayload) => void) | null = null;
 
 type BackendStatus = {
   watcher_running: boolean;
@@ -27,6 +25,11 @@ type BackendStatus = {
   last_match_timestamp: string | null;
   last_match_sample: string | null;
   last_match_source: string | null;
+  last_scanned_appid: number | null;
+  last_cache_mtime: number | null;
+  last_new_unlock_ids: string[];
+  last_cache_status: string | null;
+  last_parse_error: string | null;
   log_path: string;
   librarycache_glob: string;
   duplicate_window_seconds: number;
@@ -152,6 +155,21 @@ function StatusPanel() {
             <div>Log path: {status?.log_path ?? "unknown"}</div>
             <div>Cache files seen: {status?.librarycache_files_seen ?? "?"}</div>
             <div>Cache glob: {status?.librarycache_glob ?? "unknown"}</div>
+            <div>Last scanned app: {status?.last_scanned_appid ?? "-"}</div>
+            <div>Cache status: {status?.last_cache_status ?? "-"}</div>
+            <div>
+              Cache mtime:{" "}
+              {status?.last_cache_mtime
+                ? formatTimestamp(new Date(status.last_cache_mtime * 1000).toISOString())
+                : "-"}
+            </div>
+            <div>
+              New IDs:{" "}
+              {status?.last_new_unlock_ids?.length
+                ? status.last_new_unlock_ids.join(", ")
+                : "-"}
+            </div>
+            <div>Parse note: {status?.last_parse_error ?? "-"}</div>
             <div>Sample: {status?.last_match_sample ?? "-"}</div>
             <div>
               Last event:{" "}
@@ -170,24 +188,6 @@ function StatusPanel() {
 }
 
 export default definePlugin(() => {
-  if (overlayToastListener === null) {
-    overlayToastListener = addEventListener<[NotificationPayload]>(
-      EVENT_NAME,
-      (payload) => {
-        if (!payload) {
-          return;
-        }
-        toaster.toast({
-          title: payload.title,
-          body: payload.subtitle,
-          duration: 4200,
-          showToast: true,
-          playSound: false,
-        });
-      },
-    );
-  }
-
   routerHook.addGlobalComponent(GLOBAL_COMPONENT_NAME, XboxNotification);
 
   return {
@@ -198,10 +198,6 @@ export default definePlugin(() => {
     content: <StatusPanel />,
     onDismount() {
       routerHook.removeGlobalComponent(GLOBAL_COMPONENT_NAME);
-      if (overlayToastListener !== null) {
-        removeEventListener(EVENT_NAME, overlayToastListener);
-        overlayToastListener = null;
-      }
     },
   };
 });

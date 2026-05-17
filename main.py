@@ -17,6 +17,7 @@ CACHE_SCAN_INTERVAL_SECONDS = 1.5
 DUPLICATE_WINDOW_SECONDS = 8.0
 RARE_PERCENT_THRESHOLD = 10.0
 SKIP_CACHE_FILES = {"achievement_progress.json"}
+AUDIO_PREROLL_SECONDS = 0.35
 
 
 class Plugin:
@@ -29,6 +30,11 @@ class Plugin:
         self._last_match_timestamp: Optional[str] = None
         self._last_match_sample: Optional[str] = None
         self._last_match_source: Optional[str] = None
+        self._last_scanned_appid: Optional[int] = None
+        self._last_cache_mtime: Optional[float] = None
+        self._last_new_unlock_ids: List[str] = []
+        self._last_cache_status: Optional[str] = None
+        self._last_parse_error: Optional[str] = None
         self._last_emitted_line = ""
         self._last_emit_monotonic = 0.0
         self._cache_mtimes: Dict[str, float] = {}
@@ -78,6 +84,11 @@ class Plugin:
             "last_match_timestamp": self._last_match_timestamp,
             "last_match_sample": self._last_match_sample,
             "last_match_source": self._last_match_source,
+            "last_scanned_appid": self._last_scanned_appid,
+            "last_cache_mtime": self._last_cache_mtime,
+            "last_new_unlock_ids": self._last_new_unlock_ids,
+            "last_cache_status": self._last_cache_status,
+            "last_parse_error": self._last_parse_error,
             "log_path": STEAM_LOG_PATH,
             "librarycache_glob": LIBRARYCACHE_GLOB,
             "duplicate_window_seconds": DUPLICATE_WINDOW_SECONDS,
@@ -104,7 +115,7 @@ class Plugin:
         )
 
     def _sound_path(self, is_rare: bool) -> str:
-        filename = "rare.wav" if is_rare else "unlock.wav"
+        filename = "rare_preroll.wav" if is_rare else "unlock_preroll.wav"
         return os.path.join(decky.DECKY_PLUGIN_DIR, "assets", filename)
 
     def _build_audio_env(self) -> Dict[str, str]:
@@ -140,7 +151,7 @@ class Plugin:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 check=False,
-                timeout=6,
+                timeout=12,
             )
 
         try:
@@ -198,6 +209,7 @@ class Plugin:
         }
 
         asyncio.create_task(self._play_sound(is_rare))
+        await asyncio.sleep(AUDIO_PREROLL_SECONDS)
         await decky.emit("xboxachievements_show", payload)
 
         self._last_match_timestamp = timestamp
@@ -299,12 +311,20 @@ class Plugin:
 
         return sections
 
-    def _extract_unlocked_ids(self, achievements: Dict[str, Any]) -> Set[str]:
-        unlocked: Set[str] = set()
-        for section in ("vecHighlight", "vecUnachieved", "vecAchievedHidden"):
+    def _achievement_lists(self, achievements: Dict[str, Any]) -> List[Tuple[str, List[Any]]]:
+        lists: List[Tuple[str, List[Any]]] = []
+        for section, values in achievements.items():
             values = achievements.get(section)
             if not isinstance(values, list):
                 continue
+            if not any(isinstance(item, dict) and "strID" in item for item in values):
+                continue
+            lists.append((section, values))
+        return lists
+
+    def _achieved_items(self, achievements: Dict[str, Any]) -> List[Dict[str, Any]]:
+        achieved: List[Dict[str, Any]] = []
+        for _section, values in self._achievement_lists(achievements):
             for item in values:
                 if not isinstance(item, dict):
                     continue
@@ -312,22 +332,21 @@ class Plugin:
                     continue
                 aid = item.get("strID")
                 if isinstance(aid, str) and aid:
-                    unlocked.add(aid)
-        return unlocked
+                    achieved.append(item)
+        return achieved
+
+    def _extract_unlocked_ids(self, achievements: Dict[str, Any]) -> Set[str]:
+        return {
+            str(item["strID"])
+            for item in self._achieved_items(achievements)
+            if isinstance(item.get("strID"), str) and item.get("strID")
+        }
 
     def _parse_highlight(
         self, appid: int, achievements: Dict[str, Any], newly_unlocked: Set[str]
-    ) -> Optional[Tuple[str, str, bool, str]]:
-        highlights = achievements.get("vecHighlight")
-        if not isinstance(highlights, list):
-            return None
-
+    ) -> Optional[Tuple[str, str, bool, str, str]]:
         candidates: List[Dict[str, Any]] = []
-        for item in highlights:
-            if not isinstance(item, dict):
-                continue
-            if item.get("bAchieved") is not True:
-                continue
+        for item in self._achieved_items(achievements):
             aid = item.get("strID")
             if isinstance(aid, str) and aid in newly_unlocked:
                 candidates.append(item)
@@ -352,7 +371,7 @@ class Plugin:
         title = "Rare Achievement Unlocked" if is_rare else "Achievement Unlocked"
         subtitle = ach_name if not ach_desc else f"{ach_name} - {ach_desc}"
         hint = f"appid={appid} id={ach_id} name={ach_name}"
-        return title, subtitle, is_rare, hint
+        return title, subtitle, is_rare, hint, ach_id
 
     async def _prime_librarycache_state(self) -> None:
         for path in self._iter_librarycache_files():
@@ -373,38 +392,52 @@ class Plugin:
         except OSError:
             return
 
-        self._cache_mtimes[path] = mtime
+        self._last_scanned_appid = appid
+        self._last_cache_mtime = mtime
 
         try:
             with open(path, "r", encoding="utf-8", errors="ignore") as stream:
                 payload = json.load(stream)
-        except Exception:
+        except Exception as err:
+            self._last_parse_error = f"{basename}: json load failed: {err}"
+            self._last_cache_status = "json_error"
             return
 
         sections = self._sections_from_cache(payload)
         achievements = sections.get("achievements")
         if not isinstance(achievements, dict):
+            self._cache_mtimes[path] = mtime
+            self._last_parse_error = f"{basename}: achievements section missing"
+            self._last_cache_status = "no_achievements_section"
             return
 
+        self._cache_mtimes[path] = mtime
+        self._last_parse_error = None
         unlocked = self._extract_unlocked_ids(achievements)
         previous = self._known_unlocked.get(appid)
         self._known_unlocked[appid] = unlocked
 
         if previous is None or not emit:
+            self._last_cache_status = "baseline_loaded"
             return
 
         newly_unlocked = unlocked - previous
         if not newly_unlocked:
+            self._last_new_unlock_ids = []
+            self._last_cache_status = "no_new_unlocks"
             return
 
+        self._last_new_unlock_ids = sorted(newly_unlocked)
+        self._last_cache_status = "new_unlocks_detected"
         parsed = self._parse_highlight(appid, achievements, newly_unlocked)
         if parsed is None:
             title = "Achievement Unlocked"
             subtitle = f"App {appid} unlocked {len(newly_unlocked)} achievement(s)"
             is_rare = False
             hint = f"appid={appid} unlocked={','.join(sorted(newly_unlocked))}"
+            dedupe_id = ",".join(sorted(newly_unlocked))
         else:
-            title, subtitle, is_rare, hint = parsed
+            title, subtitle, is_rare, hint, dedupe_id = parsed
 
         await self._emit_notification(
             title=title,
@@ -412,7 +445,7 @@ class Plugin:
             is_rare=is_rare,
             line_hint=hint,
             source="librarycache",
-            dedupe_key=f"librarycache:{appid}:{','.join(sorted(newly_unlocked))}",
+            dedupe_key=f"librarycache:{appid}:{dedupe_id}",
         )
 
     async def _watch_librarycache(self) -> None:

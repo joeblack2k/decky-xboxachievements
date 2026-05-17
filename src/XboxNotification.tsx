@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { addEventListener, removeEventListener } from "@decky/api";
-import { FaXbox } from "react-icons/fa";
+import { FaGem, FaXbox } from "react-icons/fa";
 import "./style.css";
 
 export type NotificationPayload = {
@@ -21,19 +21,6 @@ const defaultPayload: NotificationPayload = {
   subtitle: "Waiting for events...",
   is_rare: false,
   timestamp: new Date().toISOString(),
-};
-
-const formatClock = (timestamp: string): string => {
-  const parsed = new Date(timestamp);
-  if (Number.isNaN(parsed.getTime())) {
-    return timestamp;
-  }
-
-  return parsed.toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
 };
 
 const trimSubtitle = (value: string): string => {
@@ -116,7 +103,6 @@ export default function XboxNotification() {
   }, [active, runKey]);
 
   const subtitle = useMemo(() => trimSubtitle(payload.subtitle), [payload.subtitle]);
-  const clock = useMemo(() => formatClock(payload.timestamp), [payload.timestamp]);
   const unlockMessage = payload.is_rare
     ? "Rare Achievement Unlocked"
     : "Achievement Unlocked";
@@ -150,17 +136,19 @@ export default function XboxNotification() {
             <div className="xboxachv-iconborder" />
 
             <div className="xboxachv-icon">
-              <FaXbox size={24} />
+              {payload.is_rare ? <FaGem size={20} /> : <FaXbox size={24} />}
             </div>
           </div>
 
           <div className="xboxachv-achcontent">
             <span className="xboxachv-unlockmsg">{unlockMessage}</span>
-            {showTitle ? <span className="xboxachv-title">{payload.title}</span> : null}
-            {showSubtitle ? <span className="xboxachv-desc">{subtitle}</span> : null}
+            {showTitle || showSubtitle ? (
+              <span className="xboxachv-detail">
+                {showTitle ? <span className="xboxachv-title">{payload.title}</span> : null}
+                {showSubtitle ? <span className="xboxachv-desc">{subtitle}</span> : null}
+              </span>
+            ) : null}
           </div>
-
-          <span className="xboxachv-time">{clock}</span>
         </div>
       </div>
     </div>
