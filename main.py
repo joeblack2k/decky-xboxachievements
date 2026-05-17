@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import time
+import urllib.parse
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import decky
@@ -18,15 +19,28 @@ DUPLICATE_WINDOW_SECONDS = 8.0
 RARE_PERCENT_THRESHOLD = 10.0
 SKIP_CACHE_FILES = {"achievement_progress.json"}
 AUDIO_PREROLL_SECONDS = 0.35
+STEAM_ID64_BASE = 76561197960265728
+STEAM_WEB_API_KEY_ENV = "STEAM_WEB_API_KEY"
+STEAM_WEB_API_KEY_FILE = "/home/deck/homebrew/settings/XboxAchievements/steam_web_api_key"
+STEAM_API_TIMEOUT_SECONDS = 4.0
+STEAM_API_POLL_INTERVAL_SECONDS = 12.0
+STEAM_API_RECENT_GAME_LIMIT = 2
+STEAM_API_BASE_URL = "https://api.steampowered.com"
 
 
 class Plugin:
     def __init__(self) -> None:
         self._watcher_task: Optional[asyncio.Task] = None
         self._librarycache_task: Optional[asyncio.Task] = None
+        self._steam_api_task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
         self._watcher_running = False
         self._librarycache_running = False
+        self._steam_api_running = False
+        self._steam_api_enabled = False
+        self._steam_api_status: Optional[str] = None
+        self._steam_api_last_error: Optional[str] = None
+        self._steam_api_last_appids: List[int] = []
         self._last_match_timestamp: Optional[str] = None
         self._last_match_sample: Optional[str] = None
         self._last_match_source: Optional[str] = None
@@ -39,6 +53,8 @@ class Plugin:
         self._last_emit_monotonic = 0.0
         self._cache_mtimes: Dict[str, float] = {}
         self._known_unlocked: Dict[int, Set[str]] = {}
+        self._steam_api_known_unlocked: Dict[int, Set[str]] = {}
+        self._steam_api_percent_cache: Dict[int, Dict[str, float]] = {}
         self._recent_emit_keys: Dict[str, float] = {}
         self._achievement_patterns = [
             re.compile(r"\bachievement\s+unlocked\b", re.IGNORECASE),
@@ -56,6 +72,9 @@ class Plugin:
         self._librarycache_task = asyncio.create_task(
             self._watch_librarycache(), name="xboxachievements-librarycache-watch"
         )
+        self._steam_api_task = asyncio.create_task(
+            self._watch_steam_api(), name="xboxachievements-steam-api-watch"
+        )
         decky.logger.info("XboxAchievements backend started")
 
     async def _unload(self) -> None:
@@ -72,14 +91,26 @@ class Plugin:
                 await self._librarycache_task
             except asyncio.CancelledError:
                 pass
+        if self._steam_api_task is not None:
+            self._steam_api_task.cancel()
+            try:
+                await self._steam_api_task
+            except asyncio.CancelledError:
+                pass
         self._watcher_running = False
         self._librarycache_running = False
+        self._steam_api_running = False
         decky.logger.info("XboxAchievements backend stopped")
 
     async def get_status(self) -> dict:
         return {
             "watcher_running": self._watcher_running,
             "librarycache_watcher_running": self._librarycache_running,
+            "steam_api_running": self._steam_api_running,
+            "steam_api_enabled": self._steam_api_enabled,
+            "steam_api_status": self._steam_api_status,
+            "steam_api_last_error": self._steam_api_last_error,
+            "steam_api_last_appids": self._steam_api_last_appids,
             "librarycache_files_seen": len(self._cache_mtimes),
             "last_match_timestamp": self._last_match_timestamp,
             "last_match_sample": self._last_match_sample,
@@ -288,6 +319,194 @@ class Plugin:
             filtered.append(path)
         return filtered
 
+    def _steam_api_key(self) -> Optional[str]:
+        env_key = os.environ.get(STEAM_WEB_API_KEY_ENV, "").strip()
+        if env_key:
+            return env_key
+
+        try:
+            with open(STEAM_WEB_API_KEY_FILE, "r", encoding="utf-8") as stream:
+                file_key = stream.read().strip()
+        except OSError:
+            return None
+
+        return file_key or None
+
+    def _steamid64_from_userdata(self) -> Optional[int]:
+        candidates: List[Tuple[int, int]] = []
+        for path in glob.glob("/home/deck/.local/share/Steam/userdata/*"):
+            account_id_text = os.path.basename(path)
+            if not account_id_text.isdigit():
+                continue
+
+            cache_glob = os.path.join(path, "config", "librarycache", "*.json")
+            candidates.append((len(glob.glob(cache_glob)), int(account_id_text)))
+
+        if not candidates:
+            return None
+
+        _cache_count, account_id = max(candidates)
+        return STEAM_ID64_BASE + account_id
+
+    async def _steam_api_json(self, path: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        url = f"{STEAM_API_BASE_URL}{path}?{urllib.parse.urlencode(params)}"
+
+        def _request() -> Dict[str, Any]:
+            env = os.environ.copy()
+            env.pop("LD_LIBRARY_PATH", None)
+            env.pop("LD_PRELOAD", None)
+            result = subprocess.run(
+                [
+                    "curl",
+                    "--fail",
+                    "--silent",
+                    "--show-error",
+                    "--location",
+                    "--max-time",
+                    str(int(STEAM_API_TIMEOUT_SECONDS)),
+                    "--user-agent",
+                    "DeckyXboxAchievements/1.0",
+                    url,
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                check=False,
+            )
+            if result.returncode != 0:
+                stderr = (result.stderr or "").strip()
+                raise RuntimeError(f"curl failed ({result.returncode}): {stderr}")
+            return json.loads(result.stdout)
+
+        return await asyncio.to_thread(_request)
+
+    async def _steam_api_recent_appids(self, key: str, steamid64: int) -> List[int]:
+        payload = await self._steam_api_json(
+            "/IPlayerService/GetRecentlyPlayedGames/v1/",
+            {
+                "key": key,
+                "steamid": steamid64,
+                "count": STEAM_API_RECENT_GAME_LIMIT,
+                "format": "json",
+            },
+        )
+
+        games = payload.get("response", {}).get("games", [])
+        appids: List[int] = []
+        for game in games:
+            appid = game.get("appid") if isinstance(game, dict) else None
+            if isinstance(appid, int):
+                appids.append(appid)
+
+        return appids
+
+    async def _steam_api_global_percentages(self, appid: int) -> Dict[str, float]:
+        cached = self._steam_api_percent_cache.get(appid)
+        if cached is not None:
+            return cached
+
+        payload = await self._steam_api_json(
+            f"/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2/",
+            {"gameid": appid, "format": "json"},
+        )
+        achievements = payload.get("achievementpercentages", {}).get(
+            "achievements", []
+        )
+        percentages: Dict[str, float] = {}
+        for item in achievements:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            percent = item.get("percent")
+            if isinstance(name, str) and isinstance(percent, (int, float)):
+                percentages[name] = float(percent)
+
+        self._steam_api_percent_cache[appid] = percentages
+        return percentages
+
+    async def _process_steam_api_appid(
+        self, key: str, steamid64: int, appid: int
+    ) -> None:
+        payload = await self._steam_api_json(
+            "/ISteamUserStats/GetPlayerAchievements/v1/",
+            {
+                "key": key,
+                "steamid": steamid64,
+                "appid": appid,
+                "l": "english",
+                "format": "json",
+            },
+        )
+
+        stats = payload.get("playerstats", {})
+        achievements = stats.get("achievements", [])
+        if not isinstance(achievements, list):
+            self._steam_api_status = f"appid={appid}: no achievements"
+            return
+
+        achieved_items: List[Dict[str, Any]] = []
+        for item in achievements:
+            if not isinstance(item, dict):
+                continue
+            if item.get("achieved") not in (1, True, "1"):
+                continue
+            ach_id = item.get("apiname")
+            if isinstance(ach_id, str) and ach_id:
+                achieved_items.append(item)
+
+        unlocked = {
+            str(item["apiname"])
+            for item in achieved_items
+            if isinstance(item.get("apiname"), str) and item.get("apiname")
+        }
+        previous = self._steam_api_known_unlocked.get(appid)
+        self._steam_api_known_unlocked[appid] = unlocked
+
+        if previous is None:
+            self._steam_api_status = f"appid={appid}: baseline_loaded"
+            return
+
+        newly_unlocked = unlocked - previous
+        if not newly_unlocked:
+            self._steam_api_status = f"appid={appid}: no_new_unlocks"
+            return
+
+        candidates = [
+            item
+            for item in achieved_items
+            if isinstance(item.get("apiname"), str)
+            and item.get("apiname") in newly_unlocked
+        ]
+        candidates.sort(
+            key=lambda item: int(item.get("unlocktime") or 0),
+            reverse=True,
+        )
+        latest = candidates[0] if candidates else {}
+        ach_id = str(latest.get("apiname") or sorted(newly_unlocked)[-1])
+        ach_name = str(latest.get("name") or ach_id)
+        ach_desc = str(latest.get("description") or "").strip()
+
+        is_rare = False
+        try:
+            percentages = await self._steam_api_global_percentages(appid)
+            percent = percentages.get(ach_id)
+            is_rare = percent is not None and percent <= RARE_PERCENT_THRESHOLD
+        except Exception as err:
+            self._steam_api_last_error = f"rarity lookup failed: {err}"
+
+        title = "Rare Achievement Unlocked" if is_rare else "Achievement Unlocked"
+        subtitle = ach_name if not ach_desc else f"{ach_name} - {ach_desc}"
+        self._steam_api_status = f"appid={appid}: new_unlocks_detected"
+        await self._emit_notification(
+            title=title,
+            subtitle=subtitle,
+            is_rare=is_rare,
+            line_hint=f"appid={appid} id={ach_id} name={ach_name}",
+            source="steam_web_api",
+            dedupe_key=f"achievement:{appid}:{ach_id}",
+        )
+
     def _sections_from_cache(self, payload: Any) -> Dict[str, Any]:
         if isinstance(payload, dict):
             return payload
@@ -445,7 +664,7 @@ class Plugin:
             is_rare=is_rare,
             line_hint=hint,
             source="librarycache",
-            dedupe_key=f"librarycache:{appid}:{dedupe_id}",
+            dedupe_key=f"achievement:{appid}:{dedupe_id}",
         )
 
     async def _watch_librarycache(self) -> None:
@@ -478,3 +697,46 @@ class Plugin:
             await asyncio.sleep(CACHE_SCAN_INTERVAL_SECONDS)
 
         self._librarycache_running = False
+
+    async def _watch_steam_api(self) -> None:
+        while not self._stop_event.is_set():
+            key = self._steam_api_key()
+            steamid64 = self._steamid64_from_userdata()
+
+            if not key:
+                self._steam_api_enabled = False
+                self._steam_api_running = False
+                self._steam_api_status = "disabled_no_api_key"
+                await asyncio.sleep(STEAM_API_POLL_INTERVAL_SECONDS)
+                continue
+
+            if steamid64 is None:
+                self._steam_api_enabled = True
+                self._steam_api_running = False
+                self._steam_api_status = "disabled_no_steamid"
+                await asyncio.sleep(STEAM_API_POLL_INTERVAL_SECONDS)
+                continue
+
+            try:
+                self._steam_api_enabled = True
+                self._steam_api_running = True
+                appids = await self._steam_api_recent_appids(key, steamid64)
+                self._steam_api_last_appids = appids
+
+                if not appids:
+                    self._steam_api_status = "no_recent_games"
+                for appid in appids:
+                    await self._process_steam_api_appid(key, steamid64, appid)
+
+                self._steam_api_last_error = None
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:
+                self._steam_api_running = False
+                self._steam_api_last_error = str(err)
+                self._steam_api_status = "error"
+                decky.logger.warning("Steam Web API watcher error: %s", err)
+
+            await asyncio.sleep(STEAM_API_POLL_INTERVAL_SECONDS)
+
+        self._steam_api_running = False

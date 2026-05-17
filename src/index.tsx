@@ -21,6 +21,11 @@ const EVENT_NAME = "xboxachievements_show";
 type BackendStatus = {
   watcher_running: boolean;
   librarycache_watcher_running: boolean;
+  steam_api_running: boolean;
+  steam_api_enabled: boolean;
+  steam_api_status: string | null;
+  steam_api_last_error: string | null;
+  steam_api_last_appids: number[];
   librarycache_files_seen: number;
   last_match_timestamp: string | null;
   last_match_sample: string | null;
@@ -147,6 +152,24 @@ function StatusPanel() {
               Cache watcher:{" "}
               <strong>{status?.librarycache_watcher_running ? "yes" : "no"}</strong>
             </div>
+            <div>
+              Steam API:{" "}
+              <strong>
+                {status?.steam_api_enabled
+                  ? status.steam_api_running
+                    ? "running"
+                    : "enabled"
+                  : "disabled"}
+              </strong>
+            </div>
+            <div>Steam API status: {status?.steam_api_status ?? "-"}</div>
+            <div>
+              Steam API appids:{" "}
+              {status?.steam_api_last_appids?.length
+                ? status.steam_api_last_appids.join(", ")
+                : "-"}
+            </div>
+            <div>Steam API error: {status?.steam_api_last_error ?? "-"}</div>
             <div>Last match: {formatTimestamp(status?.last_match_timestamp ?? null)}</div>
             <div>Last source: {status?.last_match_source ?? "-"}</div>
             <div>
