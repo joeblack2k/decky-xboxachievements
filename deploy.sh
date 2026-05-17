@@ -4,7 +4,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET_HOST="${TARGET_HOST:-deck@192.168.2.247}"
-TARGET_DIR="${TARGET_DIR:-/home/deck/homebrew/plugins/XboxAchievements}"
+TARGET_DIR="${TARGET_DIR:-/home/deck/homebrew/plugins/SANSO}"
+OLD_TARGET_DIR="${OLD_TARGET_DIR:-/home/deck/homebrew/plugins/XboxAchievements}"
 DECK_PASS="${DECK_PASS:-deck}"
 RESTART_PLUGIN_LOADER="${RESTART_PLUGIN_LOADER:-0}"
 SSH_OPTS="-o StrictHostKeyChecking=accept-new"
@@ -20,12 +21,12 @@ pnpm build
 
 echo "[3/6] Preparing target directory..."
 sshpass -p "${DECK_PASS}" ssh ${SSH_OPTS} "${TARGET_HOST}" \
-  "echo '${DECK_PASS}' | sudo -S mkdir -p '${TARGET_DIR}/assets' '${TARGET_DIR}/dist' && \
-   echo '${DECK_PASS}' | sudo -S chown -R deck:deck '${TARGET_DIR}'"
+  "echo '${DECK_PASS}' | sudo -S sh -c \"mkdir -p '${TARGET_DIR}/assets' '${TARGET_DIR}/dist' && chown -R deck:deck '${TARGET_DIR}'\""
 
 echo "[4/6] Syncing files to Steam Deck..."
 rsync -az --delete -e "${RSYNC_SSH}" "${SCRIPT_DIR}/dist/" "${TARGET_HOST}:${TARGET_DIR}/dist/"
 rsync -az --delete -e "${RSYNC_SSH}" "${SCRIPT_DIR}/assets/" "${TARGET_HOST}:${TARGET_DIR}/assets/"
+rsync -az --delete -e "${RSYNC_SSH}" "${SCRIPT_DIR}/san-themes/" "${TARGET_HOST}:${TARGET_DIR}/dist/san-themes/"
 rsync -az -e "${RSYNC_SSH}" \
   "${SCRIPT_DIR}/main.py" \
   "${SCRIPT_DIR}/steamworks_probe.py" \
@@ -35,12 +36,14 @@ rsync -az -e "${RSYNC_SSH}" \
 
 echo "[5/6] Fixing ownership..."
 sshpass -p "${DECK_PASS}" ssh ${SSH_OPTS} "${TARGET_HOST}" \
-  "echo '${DECK_PASS}' | sudo -S chown -R deck:deck '${TARGET_DIR}'"
+  "echo '${DECK_PASS}' | sudo -S sh -c \"chown -R deck:deck '${TARGET_DIR}'; if [ '${TARGET_DIR}' != '${OLD_TARGET_DIR}' ] && [ -d '${OLD_TARGET_DIR}' ]; then rm -rf '${OLD_TARGET_DIR}'; fi\""
 
 if [[ "${RESTART_PLUGIN_LOADER}" == "1" ]]; then
   echo "[5b/6] Restarting plugin loader..."
   sshpass -p "${DECK_PASS}" ssh ${SSH_OPTS} "${TARGET_HOST}" \
     "echo '${DECK_PASS}' | sudo -S systemctl restart plugin_loader"
+  sshpass -p "${DECK_PASS}" ssh ${SSH_OPTS} "${TARGET_HOST}" \
+    "sleep 4 && echo '${DECK_PASS}' | sudo -S chown -R deck:deck '${TARGET_DIR}'"
 else
   echo "[5b/6] Skipping plugin loader restart (RESTART_PLUGIN_LOADER=${RESTART_PLUGIN_LOADER})."
 fi

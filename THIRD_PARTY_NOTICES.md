@@ -16,6 +16,19 @@ This project uses open-source libraries via npm/pnpm.
 - License: MIT
 - Source: https://github.com/react-icons/react-icons
 
+## Steam Achievement Notifier Theme Assets
+
+- Resource: Steam Achievement Notifier notification presets, fonts, and images
+- Source: https://github.com/SteamAchievementNotifier/SteamAchievementNotifier
+- Vendored from commit: `4ba6a665c5bd36deac5fad746b74a3ee9b1daa90`
+- Note: SANSO vendors concrete notification preset HTML/CSS/assets for SteamOS theme compatibility and does not vendor the full SAN application.
+- License note: the upstream repository did not include a root license file or package license field at the vendored commit. Keep this notice with any redistributed theme assets and review upstream licensing if publishing outside this repository.
+
+## Vendored SAN Fonts
+
+- Font licenses are included under `san-themes/fonts/Licenses/`.
+- Most bundled SAN fonts are distributed under the SIL Open Font License by their respective authors.
+
 ## Decky Libraries
 
 - Package: `@decky/api`

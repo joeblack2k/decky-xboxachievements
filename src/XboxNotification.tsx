@@ -1,6 +1,14 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { addEventListener, removeEventListener } from "@decky/api";
+import { addEventListener, call, removeEventListener } from "@decky/api";
 import { FaGem, FaXbox } from "react-icons/fa";
+import {
+  DEFAULT_SETTINGS,
+  EVENT_NAME,
+  SETTINGS_EVENT,
+  type SansoSettings,
+  pluginBaseUrl,
+  themeById,
+} from "./sansoThemes";
 import "./style.css";
 
 export type NotificationPayload = {
@@ -10,11 +18,18 @@ export type NotificationPayload = {
   timestamp: string;
 };
 
-const EVENT_NAME = "xboxachievements_show";
 const SHOW_MS = 5200;
 const SHADOW_STYLE_ID = "xboxachv-shadow-style";
 const TARGET_DOC_STYLE_ID = "xboxachv-targetdoc-style";
 const STYLE_SENTINEL = ".xboxachv-stage{";
+const SAN_DISPLAY_SECONDS = SHOW_MS / 1000;
+
+type SanThemeAssets = {
+  html: string;
+  css: string;
+};
+
+const sanThemeCache = new Map<string, Promise<SanThemeAssets>>();
 
 const defaultPayload: NotificationPayload = {
   title: "Achievement Unlocked",
@@ -31,12 +46,188 @@ const trimSubtitle = (value: string): string => {
   return `...${normalized.slice(-117)}`;
 };
 
+const rewriteCssUrls = (cssText: string, cssUrl: string): string =>
+  cssText.replace(/url\((['"]?)(?!data:|https?:|#)([^'")]+)\1\)/gi, (_match, _quote, rawUrl) => {
+    const absolute = new URL(String(rawUrl).trim(), cssUrl).toString();
+    return `url("${absolute}")`;
+  });
+
+const fetchText = async (url: string): Promise<string> => {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}: ${url}`);
+  }
+  return response.text();
+};
+
+const loadSanTheme = (preset: string): Promise<SanThemeAssets> => {
+  const cached = sanThemeCache.get(preset);
+  if (cached) {
+    return cached;
+  }
+
+  const baseUrl = `${pluginBaseUrl()}san-themes/`;
+  const promise = Promise.all([
+    fetchText(`${baseUrl}notify/base.css`).then((css) =>
+      rewriteCssUrls(css, `${baseUrl}notify/base.css`),
+    ),
+    fetchText(`${baseUrl}notify/baseanim.css`).then((css) =>
+      rewriteCssUrls(css, `${baseUrl}notify/baseanim.css`),
+    ),
+    fetchText(`${baseUrl}notify/presets/${preset}/styles.css`).then((css) =>
+      rewriteCssUrls(css, `${baseUrl}notify/presets/${preset}/styles.css`),
+    ),
+    fetchText(`${baseUrl}notify/presets/${preset}/index.html`),
+  ]).then(([baseCss, baseAnimCss, presetCss, html]) => ({
+    html,
+    css: `${baseCss}\n${baseAnimCss}\n${presetCss}`,
+  }));
+
+  sanThemeCache.set(preset, promise);
+  return promise;
+};
+
+const splitAchievementText = (subtitle: string): { title: string; desc: string } => {
+  const separator = " - ";
+  const index = subtitle.indexOf(separator);
+  if (index <= 0) {
+    return { title: subtitle, desc: "" };
+  }
+  return {
+    title: subtitle.slice(0, index),
+    desc: subtitle.slice(index + separator.length),
+  };
+};
+
+const buildSanSrcDoc = (
+  assets: SanThemeAssets,
+  preset: string,
+  payload: NotificationPayload,
+): string => {
+  const parser = new DOMParser();
+  const document = parser.parseFromString(assets.html, "text/html");
+  const meta = document.querySelector("meta");
+  const width = meta?.getAttribute("width") ?? "300";
+  const height = meta?.getAttribute("height") ?? "50";
+  meta?.remove();
+
+  const baseUrl = `${pluginBaseUrl()}san-themes/`;
+  const { title, desc } = splitAchievementText(trimSubtitle(payload.subtitle));
+  const unlockMessage = payload.is_rare
+    ? "Rare Achievement Unlocked"
+    : "Achievement Unlocked";
+  const primary = payload.is_rare ? "#663399" : "#203e7a";
+  const secondary = payload.is_rare ? "#521f85" : "#0c2a66";
+  const trophy = payload.is_rare ? "sanlogotrophy_gold.svg" : "sanlogotrophy.svg";
+
+  document.querySelectorAll("#unlockmsg").forEach((element) => {
+    element.textContent = unlockMessage;
+  });
+  document.querySelectorAll("#title").forEach((element) => {
+    element.textContent = title;
+    element.setAttribute("gs", "0");
+    element.setAttribute("unit", preset === "xbox360" || preset === "gfwl" ? "G" : "");
+  });
+  document.querySelectorAll("#desc").forEach((element) => {
+    element.textContent = desc;
+    element.setAttribute("gs", "0");
+    element.setAttribute("unit", preset === "xbox360" || preset === "gfwl" ? "G" : "");
+  });
+  document.querySelectorAll<HTMLImageElement>("img#achicon").forEach((image) => {
+    image.src = `${baseUrl}img/achicon.png`;
+  });
+
+  const bodyAttrs = [
+    "gradient",
+    "alldetails",
+    "bottomcenter",
+    payload.is_rare ? "rare" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const html = document.body.innerHTML;
+  const cssVars = [
+    `--notifywidth:${width}px`,
+    `--notifyheight:${height}px`,
+    `--displaytime:${SAN_DISPLAY_SECONDS}s`,
+    "--transition:0.42s",
+    "--bodyopacity:1",
+    "--scale:1",
+    `--primarycolor:${primary}`,
+    `--secondarycolor:${secondary}`,
+    "--tertiarycolor:#ffffff",
+    "--fontcolor:#ffffff",
+    "--opacity:1",
+    "--roundness:12px",
+    "--iconroundness:12px",
+    "--outline:none",
+    "--outlinewidth:0",
+    "--outlinecolor:transparent",
+    "--fontsize:1",
+    "--unlockmsgfontsize:1",
+    "--titlefontsize:1",
+    "--descfontsize:1",
+    `--logo:url('${baseUrl}img/${trophy}')`,
+    `--decoration:url('${baseUrl}img/${trophy}')`,
+    "--decorationdisplaytype:block",
+    "--decorationindex:1",
+    "--decorationscale:1",
+    "--logoscale:1",
+    "--iconscale:1",
+    "--iconborder:",
+    "--iconborderpos:99",
+    "--iconborderscale:1",
+    "--iconborderx:0",
+    "--iconbordery:0",
+    "--textvspace:0",
+  ].join(";");
+
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>${assets.css}</style>
+    <style>
+      html, body { width: 100vw; height: 100vh; overflow: hidden; background: transparent !important; }
+      body { ${cssVars}; }
+    </style>
+  </head>
+  <body ${bodyAttrs}>${html}</body>
+</html>`;
+};
+
 export default function XboxNotification() {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const hideTimer = useRef<number | null>(null);
   const [payload, setPayload] = useState<NotificationPayload>(defaultPayload);
+  const [settings, setSettings] = useState<SansoSettings>(DEFAULT_SETTINGS);
+  const [sanAssets, setSanAssets] = useState<SanThemeAssets | null>(null);
+  const [sanError, setSanError] = useState<string | null>(null);
   const [active, setActive] = useState(false);
   const [runKey, setRunKey] = useState(0);
+
+  useEffect(() => {
+    const refreshSettings = async () => {
+      try {
+        setSettings(await call<[], SansoSettings>("get_settings"));
+      } catch {
+        setSettings(DEFAULT_SETTINGS);
+      }
+    };
+
+    const onSettingsChanged = (event: Event) => {
+      const next = (event as CustomEvent<SansoSettings>).detail;
+      if (next) {
+        setSettings(next);
+      } else {
+        void refreshSettings();
+      }
+    };
+
+    void refreshSettings();
+    window.addEventListener(SETTINGS_EVENT, onSettingsChanged);
+    return () => window.removeEventListener(SETTINGS_EVENT, onSettingsChanged);
+  }, []);
 
   useEffect(() => {
     const onNotify = (nextPayload: NotificationPayload) => {
@@ -70,6 +261,34 @@ export default function XboxNotification() {
       removeEventListener(EVENT_NAME, registered);
     };
   }, []);
+
+  useEffect(() => {
+    const theme = themeById(settings.theme);
+    if (!theme.preset || !active) {
+      setSanAssets(null);
+      setSanError(null);
+      return;
+    }
+
+    let cancelled = false;
+    loadSanTheme(theme.preset)
+      .then((assets) => {
+        if (!cancelled) {
+          setSanAssets(assets);
+          setSanError(null);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setSanAssets(null);
+          setSanError(error instanceof Error ? error.message : String(error));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [active, settings.theme]);
 
   useLayoutEffect(() => {
     const stage = stageRef.current;
@@ -117,6 +336,20 @@ export default function XboxNotification() {
 
   if (!active) {
     return null;
+  }
+
+  const theme = themeById(settings.theme);
+  if (theme.preset && sanAssets && !sanError) {
+    return (
+      <div ref={stageRef} className="xboxachv-stage sanso-san-stage" aria-live="polite">
+        <iframe
+          key={`${runKey}-${theme.id}`}
+          className="sanso-san-frame"
+          srcDoc={buildSanSrcDoc(sanAssets, theme.preset, payload)}
+          title="SANSO achievement notification"
+        />
+      </div>
+    );
   }
 
   return (

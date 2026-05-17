@@ -34,7 +34,33 @@ SKIP_CACHE_FILES = {"achievement_progress.json"}
 AUDIO_PREROLL_SECONDS = 0.35
 STEAM_ID64_BASE = 76561197960265728
 STEAM_WEB_API_KEY_ENV = "STEAM_WEB_API_KEY"
-STEAM_WEB_API_KEY_FILE = "/home/deck/homebrew/settings/XboxAchievements/steam_web_api_key"
+SANSO_SETTINGS_DIR = "/home/deck/homebrew/settings/SANSO"
+SANSO_SETTINGS_FILE = os.path.join(SANSO_SETTINGS_DIR, "settings.json")
+OLD_SETTINGS_DIR = "/home/deck/homebrew/settings/XboxAchievements"
+STEAM_WEB_API_KEY_FILES = [
+    os.path.join(SANSO_SETTINGS_DIR, "steam_web_api_key"),
+    os.path.join(OLD_SETTINGS_DIR, "steam_web_api_key"),
+]
+SOUNDS_DIR_NAME = "sounds"
+DEFAULT_SETTINGS = {
+    "theme": "xbox-achievement",
+    "normal_sound": "unlock_preroll.wav",
+    "rare_sound": "rare_preroll.wav",
+}
+SUPPORTED_THEMES = {
+    "xbox-achievement",
+    "default",
+    "xqjan",
+    "steamdeck",
+    "epicgames",
+    "xboxone",
+    "xbox360",
+    "ps5",
+    "ps4",
+    "ps3",
+    "windows",
+    "gfwl",
+}
 STEAM_API_TIMEOUT_SECONDS = 2.0
 STEAM_API_POLL_INTERVAL_SECONDS = 12.0
 STEAM_API_RECENT_GAME_LIMIT = 2
@@ -116,20 +142,21 @@ class Plugin:
 
     async def _main(self) -> None:
         self._stop_event.clear()
+        self._save_settings(self._load_settings())
         await self._prime_librarycache_state()
         self._watcher_task = asyncio.create_task(
-            self._watch_logs(), name="xboxachievements-logwatch"
+            self._watch_logs(), name="sanso-logwatch"
         )
         self._librarycache_task = asyncio.create_task(
-            self._watch_librarycache(), name="xboxachievements-librarycache-watch"
+            self._watch_librarycache(), name="sanso-librarycache-watch"
         )
         self._steam_api_task = asyncio.create_task(
-            self._watch_steam_api(), name="xboxachievements-steam-api-watch"
+            self._watch_steam_api(), name="sanso-steam-api-watch"
         )
         self._steamworks_task = asyncio.create_task(
-            self._watch_steamworks(), name="xboxachievements-steamworks-watch"
+            self._watch_steamworks(), name="sanso-steamworks-watch"
         )
-        decky.logger.info("XboxAchievements backend started")
+        decky.logger.info("SANSO backend started")
 
     async def _unload(self) -> None:
         self._stop_event.set()
@@ -155,7 +182,7 @@ class Plugin:
         self._librarycache_running = False
         self._steam_api_running = False
         self._steamworks_running = False
-        decky.logger.info("XboxAchievements backend stopped")
+        decky.logger.info("SANSO backend stopped")
 
     async def get_status(self) -> dict:
         return {
@@ -180,6 +207,7 @@ class Plugin:
             "steamworks_last_process_pid": self._steamworks_last_process_pid,
             "steamworks_unlock_count": self._steamworks_unlock_count,
             "steamworks_poll_interval_ms": STEAMWORKS_POLL_INTERVAL_MS,
+            "settings": self._load_settings(),
             "librarycache_files_seen": len(self._cache_mtimes),
             "last_match_timestamp": self._last_match_timestamp,
             "last_match_sample": self._last_match_sample,
@@ -193,6 +221,19 @@ class Plugin:
             "librarycache_glob": LIBRARYCACHE_GLOB,
             "duplicate_window_seconds": DUPLICATE_WINDOW_SECONDS,
         }
+
+    async def get_settings(self) -> dict:
+        settings = self._load_settings()
+        self._save_settings(settings)
+        return settings
+
+    async def set_settings(self, settings: dict) -> dict:
+        merged = self._sanitize_settings({**self._load_settings(), **settings})
+        self._save_settings(merged)
+        return merged
+
+    async def list_sounds(self) -> List[str]:
+        return self._list_sound_files()
 
     async def test_popup_main(self) -> None:
         await self._emit_notification(
@@ -214,9 +255,87 @@ class Plugin:
             dedupe_key=f"manual:rare:{time.monotonic()}",
         )
 
+    def _settings_dir(self) -> str:
+        return SANSO_SETTINGS_DIR
+
+    def _sound_dir(self) -> str:
+        return os.path.join(decky.DECKY_PLUGIN_DIR, "assets", SOUNDS_DIR_NAME)
+
+    def _list_sound_files(self) -> List[str]:
+        sound_dirs = [
+            self._sound_dir(),
+            os.path.join(decky.DECKY_PLUGIN_DIR, "assets"),
+        ]
+        sounds: Set[str] = set()
+        for sound_dir in sound_dirs:
+            try:
+                for entry in os.listdir(sound_dir):
+                    if entry.lower().endswith(".wav") and os.path.isfile(
+                        os.path.join(sound_dir, entry)
+                    ):
+                        sounds.add(entry)
+            except OSError:
+                continue
+        return sorted(sounds, key=str.lower)
+
+    def _sanitize_settings(self, raw_settings: Dict[str, Any]) -> Dict[str, str]:
+        settings = dict(DEFAULT_SETTINGS)
+        settings.update(
+            {
+                key: value
+                for key, value in raw_settings.items()
+                if key in settings and isinstance(value, str)
+            }
+        )
+
+        if settings["theme"] not in SUPPORTED_THEMES:
+            settings["theme"] = DEFAULT_SETTINGS["theme"]
+
+        sounds = set(self._list_sound_files())
+        for key in ["normal_sound", "rare_sound"]:
+            if settings[key] not in sounds:
+                settings[key] = DEFAULT_SETTINGS[key]
+
+        return settings
+
+    def _load_settings(self) -> Dict[str, str]:
+        try:
+            with open(SANSO_SETTINGS_FILE, "r", encoding="utf-8") as stream:
+                raw_settings = json.load(stream)
+        except OSError:
+            return dict(DEFAULT_SETTINGS)
+        except Exception as err:
+            decky.logger.warning("Unable to parse SANSO settings: %s", err)
+            return dict(DEFAULT_SETTINGS)
+
+        if not isinstance(raw_settings, dict):
+            return dict(DEFAULT_SETTINGS)
+        return self._sanitize_settings(raw_settings)
+
+    def _save_settings(self, settings: Dict[str, str]) -> None:
+        try:
+            os.makedirs(self._settings_dir(), exist_ok=True)
+            with open(SANSO_SETTINGS_FILE, "w", encoding="utf-8") as stream:
+                json.dump(settings, stream, indent=2, sort_keys=True)
+        except OSError as err:
+            decky.logger.warning("Unable to save SANSO settings: %s", err)
+
     def _sound_path(self, is_rare: bool) -> str:
-        filename = "rare_preroll.wav" if is_rare else "unlock_preroll.wav"
-        return os.path.join(decky.DECKY_PLUGIN_DIR, "assets", filename)
+        settings = self._load_settings()
+        filename = settings["rare_sound"] if is_rare else settings["normal_sound"]
+        candidates = [
+            os.path.join(self._sound_dir(), filename),
+            os.path.join(decky.DECKY_PLUGIN_DIR, "assets", filename),
+            os.path.join(
+                decky.DECKY_PLUGIN_DIR,
+                "assets",
+                DEFAULT_SETTINGS["rare_sound" if is_rare else "normal_sound"],
+            ),
+        ]
+        for path in candidates:
+            if os.path.exists(path):
+                return path
+        return candidates[-1]
 
     def _build_audio_env(self) -> Dict[str, str]:
         env = os.environ.copy()
@@ -242,7 +361,7 @@ class Plugin:
                 [
                     "paplay",
                     "--stream-name",
-                    "XboxAchievements",
+                    "SANSO",
                     "--property=media.role=event",
                     sound_path,
                 ],
@@ -705,11 +824,11 @@ class Plugin:
         self._steamworks_running = True
         self._steamworks_reader_task = asyncio.create_task(
             self._read_steamworks_stdout(process, appid),
-            name="xboxachievements-steamworks-stdout",
+            name="sanso-steamworks-stdout",
         )
         self._steamworks_stderr_task = asyncio.create_task(
             self._read_steamworks_stderr(process),
-            name="xboxachievements-steamworks-stderr",
+            name="sanso-steamworks-stderr",
         )
         decky.logger.info("Steamworks helper started for appid=%s", appid)
 
@@ -827,13 +946,17 @@ class Plugin:
         if env_key:
             return env_key
 
-        try:
-            with open(STEAM_WEB_API_KEY_FILE, "r", encoding="utf-8") as stream:
-                file_key = stream.read().strip()
-        except OSError:
-            return None
+        for key_file in STEAM_WEB_API_KEY_FILES:
+            try:
+                with open(key_file, "r", encoding="utf-8") as stream:
+                    file_key = stream.read().strip()
+            except OSError:
+                continue
 
-        return file_key or None
+            if file_key:
+                return file_key
+
+        return None
 
     def _steamid64_from_userdata(self) -> Optional[int]:
         candidates: List[Tuple[int, int]] = []
@@ -868,7 +991,7 @@ class Plugin:
                     "--max-time",
                     str(int(STEAM_API_TIMEOUT_SECONDS)),
                     "--user-agent",
-                    "DeckyXboxAchievements/1.0",
+                    "SANSO/1.0",
                     url,
                 ],
                 text=True,

@@ -8,6 +8,19 @@
   z-index: 2147483000;
 }
 
+.sanso-san-stage {
+  display: block;
+  padding: 0;
+}
+
+.sanso-san-frame {
+  width: 100vw;
+  height: 100vh;
+  border: 0;
+  background: transparent;
+  pointer-events: none;
+}
+
 .xboxachv-wrapper {
   --notifywidth: min(420px, calc(100vw - 28px));
   --notifyheight: 60px;

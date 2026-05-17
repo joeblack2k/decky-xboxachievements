@@ -7,16 +7,23 @@ import {
 } from "@decky/api";
 import {
   ButtonItem,
+  DropdownItem,
   PanelSection,
   PanelSectionRow,
   staticClasses,
 } from "@decky/ui";
 import { useCallback, useEffect, useState } from "react";
-import { FaXbox } from "react-icons/fa";
+import { FaSteam } from "react-icons/fa";
 import XboxNotification, { type NotificationPayload } from "./XboxNotification";
+import {
+  DEFAULT_SETTINGS,
+  EVENT_NAME,
+  SETTINGS_EVENT,
+  THEME_OPTIONS,
+  type SansoSettings,
+} from "./sansoThemes";
 
-const GLOBAL_COMPONENT_NAME = "XboxAchievementsOverlay";
-const EVENT_NAME = "xboxachievements_show";
+const GLOBAL_COMPONENT_NAME = "SANSOOverlay";
 
 type BackendStatus = {
   watcher_running: boolean;
@@ -40,6 +47,7 @@ type BackendStatus = {
   steamworks_last_process_pid: number | null;
   steamworks_unlock_count: number;
   steamworks_poll_interval_ms: number;
+  settings: SansoSettings;
   librarycache_files_seen: number;
   last_match_timestamp: string | null;
   last_match_sample: string | null;
@@ -52,6 +60,10 @@ type BackendStatus = {
   log_path: string;
   librarycache_glob: string;
   duplicate_window_seconds: number;
+};
+
+type DropdownSelection = {
+  data: string;
 };
 
 const toErrorMessage = (value: unknown): string => {
@@ -74,6 +86,8 @@ const formatTimestamp = (value: string | null): string => {
 
 function StatusPanel() {
   const [status, setStatus] = useState<BackendStatus | null>(null);
+  const [settings, setSettings] = useState<SansoSettings>(DEFAULT_SETTINGS);
+  const [sounds, setSounds] = useState<string[]>([]);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [lastEvent, setLastEvent] = useState<NotificationPayload | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
@@ -82,7 +96,22 @@ function StatusPanel() {
     try {
       const next = await call<[], BackendStatus>("get_status");
       setStatus(next);
+      setSettings(next.settings ?? DEFAULT_SETTINGS);
       setStatusError(null);
+    } catch (error) {
+      setStatusError(toErrorMessage(error));
+    }
+  }, []);
+
+  const refreshSettings = useCallback(async () => {
+    try {
+      const [nextSettings, nextSounds] = await Promise.all([
+        call<[], SansoSettings>("get_settings"),
+        call<[], string[]>("list_sounds"),
+      ]);
+      setSettings(nextSettings);
+      setSounds(nextSounds);
+      window.dispatchEvent(new CustomEvent(SETTINGS_EVENT, { detail: nextSettings }));
     } catch (error) {
       setStatusError(toErrorMessage(error));
     }
@@ -99,6 +128,7 @@ function StatusPanel() {
     );
 
     void refreshStatus();
+    void refreshSettings();
     const interval = window.setInterval(() => {
       void refreshStatus();
     }, 5000);
@@ -107,7 +137,27 @@ function StatusPanel() {
       window.clearInterval(interval);
       removeEventListener(EVENT_NAME, listener);
     };
-  }, [refreshStatus]);
+  }, [refreshSettings, refreshStatus]);
+
+  const updateSettings = useCallback(
+    async (patch: Partial<SansoSettings>) => {
+      setPendingAction("settings");
+      try {
+        const next = await call<[Partial<SansoSettings>], SansoSettings>(
+          "set_settings",
+          patch,
+        );
+        setSettings(next);
+        window.dispatchEvent(new CustomEvent(SETTINGS_EVENT, { detail: next }));
+        await refreshStatus();
+      } finally {
+        setPendingAction(null);
+      }
+    },
+    [refreshStatus],
+  );
+
+  const soundOptions = sounds.map((sound) => ({ data: sound, label: sound }));
 
   const trigger = useCallback(
     async (method: "test_popup_main" | "test_popup_rare") => {
@@ -144,6 +194,48 @@ function StatusPanel() {
           >
             Test Rare
           </ButtonItem>
+        </PanelSectionRow>
+      </PanelSection>
+
+      <PanelSection title="Settings">
+        <PanelSectionRow>
+          <DropdownItem
+            label="Theme"
+            description="Kies de notification style. XBOX Achievement is onze huidige default."
+            rgOptions={THEME_OPTIONS.map((theme) => ({
+              data: theme.id,
+              label: theme.label,
+            }))}
+            selectedOption={settings.theme}
+            disabled={pendingAction !== null}
+            onChange={(selection: DropdownSelection) =>
+              void updateSettings({ theme: selection.data })
+            }
+          />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <DropdownItem
+            label="Normal sound"
+            description="WAV voor normale achievements."
+            rgOptions={soundOptions}
+            selectedOption={settings.normal_sound}
+            disabled={pendingAction !== null || soundOptions.length === 0}
+            onChange={(selection: DropdownSelection) =>
+              void updateSettings({ normal_sound: selection.data })
+            }
+          />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <DropdownItem
+            label="Rare sound"
+            description="WAV voor rare achievements."
+            rgOptions={soundOptions}
+            selectedOption={settings.rare_sound}
+            disabled={pendingAction !== null || soundOptions.length === 0}
+            onChange={(selection: DropdownSelection) =>
+              void updateSettings({ rare_sound: selection.data })
+            }
+          />
         </PanelSectionRow>
       </PanelSection>
 
@@ -203,6 +295,10 @@ function StatusPanel() {
               Steamworks app: {status?.steamworks_last_appid ?? "-"} / poll:{" "}
               {status?.steamworks_poll_interval_ms ?? "-"}ms
             </div>
+            <div>Theme: {settings.theme}</div>
+            <div>
+              Sounds: {settings.normal_sound} / {settings.rare_sound}
+            </div>
             <div>Steamworks status: {status?.steamworks_status ?? "-"}</div>
             <div>Steamworks unlocks: {status?.steamworks_unlock_count ?? 0}</div>
             <div>Steamworks error: {status?.steamworks_last_error ?? "-"}</div>
@@ -250,10 +346,10 @@ export default definePlugin(() => {
   routerHook.addGlobalComponent(GLOBAL_COMPONENT_NAME, XboxNotification);
 
   return {
-    name: "Xbox Achievements",
-    icon: <FaXbox />,
+    name: "SANSO",
+    icon: <FaSteam />,
     alwaysRender: true,
-    titleView: <div className={staticClasses.Title}>Xbox Achievements</div>,
+    titleView: <div className={staticClasses.Title}>SANSO</div>,
     content: <StatusPanel />,
     onDismount() {
       routerHook.removeGlobalComponent(GLOBAL_COMPONENT_NAME);

@@ -1,13 +1,13 @@
 {
-  "name": "Xbox Achievements",
+  "name": "SANSO",
   "author": "nijssen",
-  "description": "Xbox-style achievement notifications for Steam Deck.",
+  "description": "SteamAchievementNotifierForSteamOS: SteamOS achievement notifications with selectable SAN-style themes.",
   "version": "1.0.0",
   "flags": [],
   "api_version": 1,
   "publish": {
-    "tags": ["style", "xbox", "achievement", "notification"],
-    "description": "Xbox-style achievement popup notifications with separate normal and rare sounds.",
+    "tags": ["style", "steam", "achievement", "notification", "steamos"],
+    "description": "SteamOS achievement popup notifications with selectable Steam Achievement Notifier inspired themes and sounds.",
     "image": "https://opengraph.githubassets.com/1/joeblack2k/decky-xboxachievements",
     "resourceLink": "https://github.com/joeblack2k/decky-xboxachievements"
   },

@@ -1,24 +1,26 @@
-# Xbox Achievements (Decky Loader)
+# SANSO - SteamAchievementNotifierForSteamOS
 
-Decky Loader plugin that displays Xbox-style achievement popups on Steam Deck and plays separate sound effects for normal and rare unlocks.
+Decky Loader plugin that displays SteamOS achievement popups with selectable Steam Achievement Notifier style themes and separate normal/rare sounds.
 
 ## Features
 
-- Xbox-inspired popup animation and styling
-- Separate `unlock.wav` and `rare.wav` playback
+- Current Xbox-style popup preserved as `XBOX Achievement`
+- Vendored SAN concrete presets: Default, xQjan, The Deck, Epic, XB Modern, XB Classic, PS Modern, PS Classic, PS Retro, Square, and Aero
+- Normal and rare sound dropdowns populated from `.wav` files in `assets/sounds`
 - Optional Steamworks fast watcher inspired by Steam Achievement Notifier
 - Fast SteamOS achievement detection via local `inotify` events
 - Safety reconciliation scan for missed local filesystem events
 - Optional Steam Web API fallback polling for recent games
-- Manual test buttons for normal and rare popups
+- Manual normal and rare popup test buttons
 
 ## Project Structure
 
 ```text
-assets/        # audio + visual assets used by the popup
+assets/        # audio assets, including assets/sounds dropdown sources
 dist/          # frontend build output loaded by Decky
+san-themes/    # vendored SAN notification presets, fonts, and images
 src/           # Decky frontend source
-main.py        # Decky backend (watchers + event + audio playback)
+main.py        # Decky backend (watchers + settings + audio playback)
 steamworks_probe.py # Optional Steamworks ctypes helper for active games
 plugin.json    # Decky manifest
 ```
@@ -28,7 +30,7 @@ plugin.json    # Decky manifest
 ```bash
 pnpm install
 pnpm build
-python3 -m py_compile main.py
+python3 -m py_compile main.py steamworks_probe.py
 ```
 
 Deploy helper:
@@ -37,16 +39,22 @@ Deploy helper:
 ./deploy.sh
 ```
 
+Default deploy target:
+
+```text
+/home/deck/homebrew/plugins/SANSO
+```
+
 ## Notes
 
-- The plugin emits frontend event `xboxachievements_show`.
-- Backend methods include `test_popup_main`, `test_popup_rare`, and `get_status`.
-- Steamworks fast watch is the lowest-latency path when a running game exposes `SteamAppId`/`SteamGameId` in its process environment. It polls Steam's local Steamworks state through `/home/deck/.local/share/Steam/steamrt64/libsteam_api.so` without Node/Electron or extra Python packages.
-- SteamOS/Linux `inotify` remains the robust local fallback. The plugin watches Steam `librarycache`, `appcache/stats`, and `stats_log.txt` changes and debounces local writes before parsing.
-- A slow reconciliation scan still runs in the background so missed local filesystem events or Steam restarts do not permanently break detection.
-- Steam Web API is optional and used only as a fallback/diagnostic source. Local cache/log detection remains the fastest path and does not wait for internet/API calls.
-- To enable Steam Web API polling on Steam Deck, put your key in `/home/deck/homebrew/settings/XboxAchievements/steam_web_api_key` or set `STEAM_WEB_API_KEY` for `plugin_loader`. Do not commit API keys.
-- Audio files shipped in this repository are original plugin sounds generated for this project.
+- Settings are stored in `/home/deck/homebrew/settings/SANSO/settings.json`.
+- The old `/home/deck/homebrew/settings/XboxAchievements/steam_web_api_key` path remains supported for API-key compatibility.
+- The plugin emits frontend event `xboxachievements_show` internally for compatibility with the existing backend/frontend flow.
+- Backend methods include `test_popup_main`, `test_popup_rare`, `get_status`, `get_settings`, `set_settings`, and `list_sounds`.
+- Steamworks fast watch is the lowest-latency path when a running game exposes `SteamAppId`/`SteamGameId` in its process environment.
+- SteamOS/Linux `inotify` remains the robust local fallback.
+- Steam Web API is optional and used only as a fallback/diagnostic source.
+- SAN theme assets are vendored with attribution in `THIRD_PARTY_NOTICES.md`; the upstream SAN repository did not include a root license file at the vendored commit.
 
 ## AI Disclosure
 
