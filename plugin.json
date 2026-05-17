@@ -1,13 +1,13 @@
 {
   "name": "SANSO",
   "author": "nijssen",
-  "description": "SteamAchievementNotifierForSteamOS: SteamOS achievement notifications with selectable SAN-style themes.",
+  "description": "SteamAchievementNotifierForSteamOS: Xbox-style SteamOS achievement notifications.",
   "version": "1.0.0",
   "flags": [],
   "api_version": 1,
   "publish": {
     "tags": ["style", "steam", "achievement", "notification", "steamos"],
-    "description": "SteamOS achievement popup notifications with selectable Steam Achievement Notifier inspired themes and sounds.",
+    "description": "Xbox-style SteamOS achievement popup notifications with selectable sounds.",
     "image": "https://opengraph.githubassets.com/1/joeblack2k/decky-xboxachievements",
     "resourceLink": "https://github.com/joeblack2k/decky-xboxachievements"
   },

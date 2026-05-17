@@ -3,7 +3,6 @@ import {
   call,
   definePlugin,
   removeEventListener,
-  routerHook,
 } from "@decky/api";
 import {
   ButtonItem,
@@ -14,16 +13,13 @@ import {
 } from "@decky/ui";
 import { useCallback, useEffect, useState } from "react";
 import { FaSteam } from "react-icons/fa";
-import XboxNotification, { type NotificationPayload } from "./XboxNotification";
 import {
   DEFAULT_SETTINGS,
   EVENT_NAME,
   SETTINGS_EVENT,
-  THEME_OPTIONS,
+  type NotificationPayload,
   type SansoSettings,
 } from "./sansoThemes";
-
-const GLOBAL_COMPONENT_NAME = "SANSOOverlay";
 
 type BackendStatus = {
   watcher_running: boolean;
@@ -160,7 +156,12 @@ function StatusPanel() {
   const soundOptions = sounds.map((sound) => ({ data: sound, label: sound }));
 
   const trigger = useCallback(
-    async (method: "test_popup_main" | "test_popup_rare") => {
+    async (
+      method:
+        | "test_popup_main"
+        | "test_popup_rare"
+        | "test_xbox_popup",
+    ) => {
       setPendingAction(method);
       try {
         await call<[], void>(method);
@@ -188,6 +189,16 @@ function StatusPanel() {
         <PanelSectionRow>
           <ButtonItem
             disabled={pendingAction !== null}
+            onClick={() => void trigger("test_xbox_popup")}
+            layout="below"
+            description="Toont de XBOX Achievement popup via de in-game gamescope overlay."
+          >
+            Test XBOX Popup
+          </ButtonItem>
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ButtonItem
+            disabled={pendingAction !== null}
             onClick={() => void trigger("test_popup_rare")}
             layout="below"
             description="Toont de rare-variant met glow en rare geluid."
@@ -198,21 +209,6 @@ function StatusPanel() {
       </PanelSection>
 
       <PanelSection title="Settings">
-        <PanelSectionRow>
-          <DropdownItem
-            label="Theme"
-            description="Kies de notification style. XBOX Achievement is onze huidige default."
-            rgOptions={THEME_OPTIONS.map((theme) => ({
-              data: theme.id,
-              label: theme.label,
-            }))}
-            selectedOption={settings.theme}
-            disabled={pendingAction !== null}
-            onChange={(selection: DropdownSelection) =>
-              void updateSettings({ theme: selection.data })
-            }
-          />
-        </PanelSectionRow>
         <PanelSectionRow>
           <DropdownItem
             label="Normal sound"
@@ -295,7 +291,7 @@ function StatusPanel() {
               Steamworks app: {status?.steamworks_last_appid ?? "-"} / poll:{" "}
               {status?.steamworks_poll_interval_ms ?? "-"}ms
             </div>
-            <div>Theme: {settings.theme}</div>
+            <div>Theme: XBOX Achievement</div>
             <div>
               Sounds: {settings.normal_sound} / {settings.rare_sound}
             </div>
@@ -343,16 +339,11 @@ function StatusPanel() {
 }
 
 export default definePlugin(() => {
-  routerHook.addGlobalComponent(GLOBAL_COMPONENT_NAME, XboxNotification);
-
   return {
     name: "SANSO",
     icon: <FaSteam />,
     alwaysRender: true,
     titleView: <div className={staticClasses.Title}>SANSO</div>,
     content: <StatusPanel />,
-    onDismount() {
-      routerHook.removeGlobalComponent(GLOBAL_COMPONENT_NAME);
-    },
   };
 });

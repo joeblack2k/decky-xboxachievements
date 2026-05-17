@@ -1,11 +1,10 @@
 # SANSO - SteamAchievementNotifierForSteamOS
 
-Decky Loader plugin that displays SteamOS achievement popups with selectable Steam Achievement Notifier style themes and separate normal/rare sounds.
+Decky Loader plugin that displays an Xbox-style SteamOS achievement popup with separate normal/rare sounds.
 
 ## Features
 
-- Current Xbox-style popup preserved as `XBOX Achievement`
-- Vendored SAN concrete presets: Default, xQjan, The Deck, Epic, XB Modern, XB Classic, PS Modern, PS Classic, PS Retro, Square, and Aero
+- Xbox-style popup rendered through a gamescope overlay for in-game visibility
 - Normal and rare sound dropdowns populated from `.wav` files in `assets/sounds`
 - Optional Steamworks fast watcher inspired by Steam Achievement Notifier
 - Fast SteamOS achievement detection via local `inotify` events
@@ -18,9 +17,9 @@ Decky Loader plugin that displays SteamOS achievement popups with selectable Ste
 ```text
 assets/        # audio assets, including assets/sounds dropdown sources
 dist/          # frontend build output loaded by Decky
-san-themes/    # vendored SAN notification presets, fonts, and images
 src/           # Decky frontend source
-main.py        # Decky backend (watchers + settings + audio playback)
+main.py        # Decky backend (watchers + settings + audio playback + overlay trigger)
+sanso_gamescope_overlay.py # Gamescope external overlay helper for the Xbox popup
 steamworks_probe.py # Optional Steamworks ctypes helper for active games
 plugin.json    # Decky manifest
 ```
@@ -30,7 +29,7 @@ plugin.json    # Decky manifest
 ```bash
 pnpm install
 pnpm build
-python3 -m py_compile main.py steamworks_probe.py
+python3 -m py_compile main.py steamworks_probe.py sanso_gamescope_overlay.py
 ```
 
 Deploy helper:
@@ -54,7 +53,6 @@ Default deploy target:
 - Steamworks fast watch is the lowest-latency path when a running game exposes `SteamAppId`/`SteamGameId` in its process environment.
 - SteamOS/Linux `inotify` remains the robust local fallback.
 - Steam Web API is optional and used only as a fallback/diagnostic source.
-- SAN theme assets are vendored with attribution in `THIRD_PARTY_NOTICES.md`; the upstream SAN repository did not include a root license file at the vendored commit.
 
 ## AI Disclosure
 

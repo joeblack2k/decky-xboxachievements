@@ -21,6 +21,7 @@ LIBRARYCACHE_DIR_GLOB = "/home/deck/.local/share/Steam/userdata/*/config/library
 STEAM_APPCACHE_STATS_DIR = "/home/deck/.local/share/Steam/appcache/stats"
 STEAMWORKS_LIB_PATH = "/home/deck/.local/share/Steam/steamrt64/libsteam_api.so"
 STEAMWORKS_HELPER_NAME = "steamworks_probe.py"
+SANSO_OVERLAY_HELPER_NAME = "sanso_gamescope_overlay.py"
 STEAMWORKS_PYTHON = "/usr/bin/python3"
 POLL_INTERVAL_SECONDS = 0.35
 CACHE_SCAN_INTERVAL_SECONDS = 1.5
@@ -43,23 +44,8 @@ STEAM_WEB_API_KEY_FILES = [
 ]
 SOUNDS_DIR_NAME = "sounds"
 DEFAULT_SETTINGS = {
-    "theme": "xbox-achievement",
     "normal_sound": "unlock_preroll.wav",
     "rare_sound": "rare_preroll.wav",
-}
-SUPPORTED_THEMES = {
-    "xbox-achievement",
-    "default",
-    "xqjan",
-    "steamdeck",
-    "epicgames",
-    "xboxone",
-    "xbox360",
-    "ps5",
-    "ps4",
-    "ps3",
-    "windows",
-    "gfwl",
 }
 STEAM_API_TIMEOUT_SECONDS = 2.0
 STEAM_API_POLL_INTERVAL_SECONDS = 12.0
@@ -130,6 +116,9 @@ class Plugin:
         self._steam_api_known_unlocked: Dict[int, Set[str]] = {}
         self._steam_api_percent_cache: Dict[int, Dict[str, float]] = {}
         self._recent_emit_keys: Dict[str, float] = {}
+        self._gamescope_overlay_lock = asyncio.Lock()
+        self._gamescope_overlay_status: Optional[str] = None
+        self._gamescope_overlay_last_error: Optional[str] = None
         self._achievement_patterns = [
             re.compile(r"\bachievement\s+unlocked\b", re.IGNORECASE),
             re.compile(r"\bunlocked\s+achievement\b", re.IGNORECASE),
@@ -207,6 +196,8 @@ class Plugin:
             "steamworks_last_process_pid": self._steamworks_last_process_pid,
             "steamworks_unlock_count": self._steamworks_unlock_count,
             "steamworks_poll_interval_ms": STEAMWORKS_POLL_INTERVAL_MS,
+            "gamescope_overlay_status": self._gamescope_overlay_status,
+            "gamescope_overlay_last_error": self._gamescope_overlay_last_error,
             "settings": self._load_settings(),
             "librarycache_files_seen": len(self._cache_mtimes),
             "last_match_timestamp": self._last_match_timestamp,
@@ -255,6 +246,19 @@ class Plugin:
             dedupe_key=f"manual:rare:{time.monotonic()}",
         )
 
+    async def test_xbox_popup(self) -> None:
+        await self._emit_notification(
+            title="SANSO Popup Test",
+            subtitle="XBOX Achievement",
+            is_rare=False,
+            line_hint="manual:test:xbox-popup",
+            source="manual_xbox_popup",
+            dedupe_key=f"manual:xbox-popup:{time.monotonic()}",
+        )
+
+    async def test_xbox_theme(self) -> None:
+        await self.test_xbox_popup()
+
     def _settings_dir(self) -> str:
         return SANSO_SETTINGS_DIR
 
@@ -287,9 +291,6 @@ class Plugin:
                 if key in settings and isinstance(value, str)
             }
         )
-
-        if settings["theme"] not in SUPPORTED_THEMES:
-            settings["theme"] = DEFAULT_SETTINGS["theme"]
 
         sounds = set(self._list_sound_files())
         for key in ["normal_sound", "rare_sound"]:
@@ -373,6 +374,66 @@ class Plugin:
         except Exception as err:
             decky.logger.error("Audio playback failed: %s", err)
 
+    async def _systemctl_user(self, action: str, unit: str) -> None:
+        process = await asyncio.create_subprocess_exec(
+            "systemctl",
+            "--user",
+            action,
+            unit,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await process.wait()
+
+    async def _show_gamescope_overlay(self, payload: Dict[str, Any]) -> None:
+        helper_path = os.path.join(decky.DECKY_PLUGIN_DIR, SANSO_OVERLAY_HELPER_NAME)
+        if not os.path.exists(helper_path):
+            self._gamescope_overlay_last_error = f"missing helper: {helper_path}"
+            return
+
+        async with self._gamescope_overlay_lock:
+            env = os.environ.copy()
+            env.update(
+                {
+                    "DISPLAY": ":0",
+                    "XDG_RUNTIME_DIR": "/run/user/1000",
+                    "SANSO_TITLE": str(payload.get("title") or "Achievement Unlocked"),
+                    "SANSO_SUBTITLE": str(payload.get("subtitle") or ""),
+                    "SANSO_RARE": "1" if payload.get("is_rare") else "0",
+                    "SANSO_SECONDS": "5.8",
+                }
+            )
+            self._gamescope_overlay_status = "starting"
+            try:
+                await self._systemctl_user("stop", "gamescope-mangoapp.service")
+                process = await asyncio.create_subprocess_exec(
+                    STEAMWORKS_PYTHON,
+                    helper_path,
+                    env=env,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await process.communicate()
+                if process.returncode == 0:
+                    self._gamescope_overlay_status = "shown"
+                    self._gamescope_overlay_last_error = None
+                else:
+                    stderr_text = stderr.decode("utf-8", errors="replace").strip()
+                    self._gamescope_overlay_status = f"failed:{process.returncode}"
+                    self._gamescope_overlay_last_error = stderr_text[-500:] or "unknown overlay helper error"
+                    decky.logger.warning(
+                        "Gamescope overlay failed rc=%s stdout=%s stderr=%s",
+                        process.returncode,
+                        stdout.decode("utf-8", errors="replace")[-500:],
+                        stderr_text[-500:],
+                    )
+            except Exception as err:
+                self._gamescope_overlay_status = "failed"
+                self._gamescope_overlay_last_error = str(err)
+                decky.logger.warning("Gamescope overlay failed: %s", err)
+            finally:
+                await self._systemctl_user("start", "gamescope-mangoapp.service")
+
     def _is_achievement_line(self, line: str) -> bool:
         return any(pattern.search(line) for pattern in self._achievement_patterns)
 
@@ -419,6 +480,7 @@ class Plugin:
 
         asyncio.create_task(self._play_sound(is_rare))
         await asyncio.sleep(AUDIO_PREROLL_SECONDS)
+        asyncio.create_task(self._show_gamescope_overlay(payload))
         await decky.emit("xboxachievements_show", payload)
 
         self._last_match_timestamp = timestamp

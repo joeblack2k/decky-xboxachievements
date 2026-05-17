@@ -1,7 +1,7 @@
 {
   "name": "steam-achievement-notifier-for-steamos",
   "version": "1.0.0",
-  "description": "Decky Loader SteamOS achievement notifier with selectable SAN-style themes",
+  "description": "Decky Loader SteamOS achievement notifier with Xbox-style in-game popups",
   "type": "module",
   "scripts": {
     "build": "rollup -c",

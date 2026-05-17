@@ -9,7 +9,7 @@ OLD_TARGET_DIR="${OLD_TARGET_DIR:-/home/deck/homebrew/plugins/XboxAchievements}"
 DECK_PASS="${DECK_PASS:-deck}"
 RESTART_PLUGIN_LOADER="${RESTART_PLUGIN_LOADER:-0}"
 SSH_OPTS="-o StrictHostKeyChecking=accept-new"
-RSYNC_SSH="sshpass -p ${DECK_PASS} ssh ${SSH_OPTS}"
+RSYNC_SSH="ssh ${SSH_OPTS}"
 
 cd "${SCRIPT_DIR}"
 
@@ -24,11 +24,11 @@ sshpass -p "${DECK_PASS}" ssh ${SSH_OPTS} "${TARGET_HOST}" \
   "echo '${DECK_PASS}' | sudo -S sh -c \"mkdir -p '${TARGET_DIR}/assets' '${TARGET_DIR}/dist' && chown -R deck:deck '${TARGET_DIR}'\""
 
 echo "[4/6] Syncing files to Steam Deck..."
-rsync -az --delete -e "${RSYNC_SSH}" "${SCRIPT_DIR}/dist/" "${TARGET_HOST}:${TARGET_DIR}/dist/"
-rsync -az --delete -e "${RSYNC_SSH}" "${SCRIPT_DIR}/assets/" "${TARGET_HOST}:${TARGET_DIR}/assets/"
-rsync -az --delete -e "${RSYNC_SSH}" "${SCRIPT_DIR}/san-themes/" "${TARGET_HOST}:${TARGET_DIR}/dist/san-themes/"
-rsync -az -e "${RSYNC_SSH}" \
+sshpass -p "${DECK_PASS}" rsync -az --delete -e "${RSYNC_SSH}" "${SCRIPT_DIR}/dist/" "${TARGET_HOST}:${TARGET_DIR}/dist/"
+sshpass -p "${DECK_PASS}" rsync -az --delete -e "${RSYNC_SSH}" "${SCRIPT_DIR}/assets/" "${TARGET_HOST}:${TARGET_DIR}/assets/"
+sshpass -p "${DECK_PASS}" rsync -az -e "${RSYNC_SSH}" \
   "${SCRIPT_DIR}/main.py" \
+  "${SCRIPT_DIR}/sanso_gamescope_overlay.py" \
   "${SCRIPT_DIR}/steamworks_probe.py" \
   "${SCRIPT_DIR}/plugin.json" \
   "${SCRIPT_DIR}/package.json" \
@@ -36,7 +36,7 @@ rsync -az -e "${RSYNC_SSH}" \
 
 echo "[5/6] Fixing ownership..."
 sshpass -p "${DECK_PASS}" ssh ${SSH_OPTS} "${TARGET_HOST}" \
-  "echo '${DECK_PASS}' | sudo -S sh -c \"chown -R deck:deck '${TARGET_DIR}'; if [ '${TARGET_DIR}' != '${OLD_TARGET_DIR}' ] && [ -d '${OLD_TARGET_DIR}' ]; then rm -rf '${OLD_TARGET_DIR}'; fi\""
+  "echo '${DECK_PASS}' | sudo -S sh -c \"rm -rf '${TARGET_DIR}/san-themes' '${TARGET_DIR}/dist/san-themes'; chown -R deck:deck '${TARGET_DIR}'; if [ '${TARGET_DIR}' != '${OLD_TARGET_DIR}' ] && [ -d '${OLD_TARGET_DIR}' ]; then rm -rf '${OLD_TARGET_DIR}'; fi\""
 
 if [[ "${RESTART_PLUGIN_LOADER}" == "1" ]]; then
   echo "[5b/6] Restarting plugin loader..."
