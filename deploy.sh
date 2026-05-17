@@ -28,6 +28,7 @@ rsync -az --delete -e "${RSYNC_SSH}" "${SCRIPT_DIR}/dist/" "${TARGET_HOST}:${TAR
 rsync -az --delete -e "${RSYNC_SSH}" "${SCRIPT_DIR}/assets/" "${TARGET_HOST}:${TARGET_DIR}/assets/"
 rsync -az -e "${RSYNC_SSH}" \
   "${SCRIPT_DIR}/main.py" \
+  "${SCRIPT_DIR}/steamworks_probe.py" \
   "${SCRIPT_DIR}/plugin.json" \
   "${SCRIPT_DIR}/package.json" \
   "${TARGET_HOST}:${TARGET_DIR}/"

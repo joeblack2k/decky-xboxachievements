@@ -21,11 +21,25 @@ const EVENT_NAME = "xboxachievements_show";
 type BackendStatus = {
   watcher_running: boolean;
   librarycache_watcher_running: boolean;
+  watcher_mode: string;
+  last_inotify_event_path: string | null;
+  last_inotify_event_appid: number | null;
+  last_queue_latency_ms: number | null;
+  processed_inotify_events: number;
+  fallback_scan_count: number;
+  last_parse_retry_error: string | null;
   steam_api_running: boolean;
   steam_api_enabled: boolean;
   steam_api_status: string | null;
   steam_api_last_error: string | null;
   steam_api_last_appids: number[];
+  steamworks_running: boolean;
+  steamworks_status: string | null;
+  steamworks_last_error: string | null;
+  steamworks_last_appid: number | null;
+  steamworks_last_process_pid: number | null;
+  steamworks_unlock_count: number;
+  steamworks_poll_interval_ms: number;
   librarycache_files_seen: number;
   last_match_timestamp: string | null;
   last_match_sample: string | null;
@@ -152,6 +166,17 @@ function StatusPanel() {
               Cache watcher:{" "}
               <strong>{status?.librarycache_watcher_running ? "yes" : "no"}</strong>
             </div>
+            <div>Watcher mode: {status?.watcher_mode ?? "-"}</div>
+            <div>
+              Inotify app: {status?.last_inotify_event_appid ?? "-"} / latency:{" "}
+              {status?.last_queue_latency_ms ?? "-"}ms
+            </div>
+            <div>
+              Inotify events: {status?.processed_inotify_events ?? 0} / fallback scans:{" "}
+              {status?.fallback_scan_count ?? 0}
+            </div>
+            <div>Last inotify path: {status?.last_inotify_event_path ?? "-"}</div>
+            <div>Parse retry: {status?.last_parse_retry_error ?? "-"}</div>
             <div>
               Steam API:{" "}
               <strong>
@@ -170,6 +195,17 @@ function StatusPanel() {
                 : "-"}
             </div>
             <div>Steam API error: {status?.steam_api_last_error ?? "-"}</div>
+            <div>
+              Steamworks:{" "}
+              <strong>{status?.steamworks_running ? "running" : "idle"}</strong>
+            </div>
+            <div>
+              Steamworks app: {status?.steamworks_last_appid ?? "-"} / poll:{" "}
+              {status?.steamworks_poll_interval_ms ?? "-"}ms
+            </div>
+            <div>Steamworks status: {status?.steamworks_status ?? "-"}</div>
+            <div>Steamworks unlocks: {status?.steamworks_unlock_count ?? 0}</div>
+            <div>Steamworks error: {status?.steamworks_last_error ?? "-"}</div>
             <div>Last match: {formatTimestamp(status?.last_match_timestamp ?? null)}</div>
             <div>Last source: {status?.last_match_source ?? "-"}</div>
             <div>
