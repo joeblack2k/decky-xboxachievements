@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import ctypes
+import colorsys
 import math
 import os
+import re
 import sys
 import time
 
@@ -10,7 +12,9 @@ import gi
 
 gi.require_version("Pango", "1.0")
 gi.require_version("PangoCairo", "1.0")
-from gi.repository import Pango, PangoCairo
+gi.require_version("GdkPixbuf", "2.0")
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gdk, GdkPixbuf, Pango, PangoCairo
 
 
 def _load(names):
@@ -170,6 +174,43 @@ def _clamp(value, low, high):
     return max(low, min(high, value))
 
 
+def _parse_color(value, fallback):
+    if not value:
+        return fallback
+
+    text = value.strip()
+    match = re.fullmatch(
+        r"hsla?\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)%\s*,\s*(\d+(?:\.\d+)?)%\s*(?:,\s*(\d+(?:\.\d+)?)\s*)?\)",
+        text,
+        re.IGNORECASE,
+    )
+    if match:
+        h = (float(match.group(1)) % 360.0) / 360.0
+        s = _clamp(float(match.group(2)) / 100.0, 0.0, 1.0)
+        lightness = _clamp(float(match.group(3)) / 100.0, 0.0, 1.0)
+        alpha = _clamp(float(match.group(4) or fallback[3]), 0.0, 1.0)
+        r, g, b = colorsys.hls_to_rgb(h, lightness, s)
+        return r, g, b, alpha
+
+    match = re.fullmatch(r"#([0-9a-fA-F]{6})([0-9a-fA-F]{2})?", text)
+    if match:
+        rgb = match.group(1)
+        alpha_hex = match.group(2)
+        alpha = int(alpha_hex, 16) / 255.0 if alpha_hex else fallback[3]
+        return (
+            int(rgb[0:2], 16) / 255.0,
+            int(rgb[2:4], 16) / 255.0,
+            int(rgb[4:6], 16) / 255.0,
+            _clamp(alpha, 0.0, 1.0),
+        )
+
+    return fallback
+
+
+def _color_with_alpha(color, alpha):
+    return color[0], color[1], color[2], color[3] * alpha
+
+
 def _ease_out(value):
     value = _clamp(value, 0.0, 1.0)
     return 1 - (1 - value) ** 3
@@ -198,7 +239,75 @@ def _animation_state(progress):
     return open_amount, alpha, text_alpha, y_offset
 
 
-def _make_surface(width, height, scale, title, subtitle, is_rare, progress):
+def _rare_slide(progress):
+    if progress >= 0.24:
+        return 0.0
+    return -36.0 * (1.0 - _ease_out(progress / 0.24))
+
+
+def _draw_fallback_diamond(ctx, cx, cy, alpha):
+    ctx.set_source_rgba(0.83, 1.0, 1.0, alpha)
+    ctx.arc(cx, cy, 46, 0, math.tau)
+    ctx.fill()
+
+    ctx.set_source_rgba(0.40, 0.48, 0.50, alpha)
+    for i, pt in enumerate(
+        [
+            (cx - 20, cy - 9),
+            (cx - 8, cy - 23),
+            (cx + 8, cy - 23),
+            (cx + 20, cy - 9),
+            (cx, cy + 23),
+        ]
+    ):
+        (ctx.move_to if i == 0 else ctx.line_to)(*pt)
+    ctx.close_path()
+    ctx.fill()
+    ctx.set_source_rgba(0.85, 0.95, 0.96, alpha)
+    ctx.set_line_width(3)
+    ctx.move_to(cx - 20, cy - 9)
+    ctx.line_to(cx + 20, cy - 9)
+    ctx.move_to(cx - 8, cy - 23)
+    ctx.line_to(cx, cy + 23)
+    ctx.move_to(cx + 8, cy - 23)
+    ctx.line_to(cx, cy + 23)
+    ctx.stroke()
+
+
+def _draw_icon(ctx, icon_path, cx, cy, radius, alpha):
+    if not icon_path or not os.path.exists(icon_path):
+        _draw_fallback_diamond(ctx, cx, cy, alpha)
+        return
+
+    try:
+        pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+            icon_path,
+            int(radius * 2),
+            int(radius * 2),
+            True,
+        )
+        ctx.save()
+        ctx.arc(cx, cy, radius, 0, math.tau)
+        ctx.clip()
+        Gdk.cairo_set_source_pixbuf(ctx, pixbuf, cx - radius, cy - radius)
+        ctx.paint_with_alpha(alpha)
+        ctx.restore()
+    except Exception:
+        _draw_fallback_diamond(ctx, cx, cy, alpha)
+
+
+def _make_surface(
+    width,
+    height,
+    scale,
+    title,
+    subtitle,
+    is_rare,
+    progress,
+    icon_path,
+    gradient_start,
+    gradient_end,
+):
     surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
     ctx = cairo.Context(surface)
     ctx.set_operator(cairo.OPERATOR_CLEAR)
@@ -211,12 +320,11 @@ def _make_surface(width, height, scale, title, subtitle, is_rare, progress):
 
     open_amount, alpha, text_alpha, y_offset = _animation_state(progress)
     full_banner_w = 930
-    start_w = 112
+    start_w = 124
     banner_w = start_w + (full_banner_w - start_w) * open_amount
     banner_h = 108
-    x = (logical_w - banner_w) / 2
+    x = (logical_w - banner_w) / 2 + (_rare_slide(progress) if is_rare else 0)
     y = (logical_h - banner_h) / 2 + y_offset
-    main = (0.72, 0.42, 0.02, 0.94 * alpha) if not is_rare else (0.44, 0.30, 0.05, 0.95 * alpha)
     accent = (1.00, 0.62, 0.02, alpha) if not is_rare else (0.98, 0.78, 0.28, alpha)
 
     _rounded_rect(ctx, x + 7, y + 8, banner_w, banner_h, 48)
@@ -224,38 +332,46 @@ def _make_surface(width, height, scale, title, subtitle, is_rare, progress):
     ctx.fill()
 
     _rounded_rect(ctx, x, y, banner_w, banner_h, 48)
-    ctx.set_source_rgba(*main)
+    fill = cairo.LinearGradient(x, y, x + banner_w, y + banner_h)
+    fill.add_color_stop_rgba(0.0, *_color_with_alpha(gradient_start, alpha))
+    fill.add_color_stop_rgba(1.0, *_color_with_alpha(gradient_end, alpha))
+    ctx.set_source(fill)
     ctx.fill_preserve()
     ctx.set_line_width(2.2)
     ctx.set_source_rgba(1.0, 0.93, 0.72, 0.86 * alpha)
     ctx.stroke()
 
-    cx = x + 72
+    cx = x + 76
     cy = y + banner_h / 2
-    ctx.arc(cx, cy, 52, 0, math.tau)
+    icon_ring_radius = 66
+    if is_rare:
+        pulse = 0.5 + 0.5 * math.sin(progress * math.tau * 4.0)
+        ctx.arc(cx, cy, icon_ring_radius + 13 + 8 * pulse, 0, math.tau)
+        ctx.set_source_rgba(1.0, 0.82, 0.22, 0.16 * alpha * pulse)
+        ctx.fill()
+        for index in range(8):
+            angle = progress * math.tau * 1.4 + index * math.tau / 8
+            sparkle_radius = icon_ring_radius + 18 + 5 * math.sin(progress * math.tau * 2 + index)
+            sx = cx + math.cos(angle) * sparkle_radius
+            sy = cy + math.sin(angle) * sparkle_radius
+            ctx.arc(sx, sy, 2.0 + 1.4 * pulse, 0, math.tau)
+            ctx.set_source_rgba(1.0, 0.92, 0.45, 0.42 * alpha)
+            ctx.fill()
+
+    ctx.arc(cx, cy, icon_ring_radius, 0, math.tau)
     ctx.set_source_rgba(*accent)
     ctx.fill_preserve()
-    ctx.set_line_width(4)
+    ctx.set_line_width(5)
     ctx.set_source_rgba(0.56, 0.31, 0.00, alpha)
     ctx.stroke()
 
-    ctx.arc(cx, cy, 39, 0, math.tau)
-    ctx.set_source_rgba(0.83, 1.0, 1.0, alpha)
+    ctx.arc(cx, cy, 53, 0, math.tau)
+    ctx.set_source_rgba(0.08, 0.06, 0.02, 0.95 * alpha)
     ctx.fill()
-
-    ctx.set_source_rgba(0.40, 0.48, 0.50, alpha)
-    for i, pt in enumerate([(cx - 17, cy - 8), (cx - 7, cy - 19), (cx + 7, cy - 19), (cx + 17, cy - 8), (cx, cy + 19)]):
-        (ctx.move_to if i == 0 else ctx.line_to)(*pt)
-    ctx.close_path()
-    ctx.fill()
-    ctx.set_source_rgba(0.85, 0.95, 0.96, alpha)
-    ctx.set_line_width(3)
-    ctx.move_to(cx - 17, cy - 8)
-    ctx.line_to(cx + 17, cy - 8)
-    ctx.move_to(cx - 7, cy - 19)
-    ctx.line_to(cx, cy + 19)
-    ctx.move_to(cx + 7, cy - 19)
-    ctx.line_to(cx, cy + 19)
+    _draw_icon(ctx, icon_path, cx, cy, 48, alpha)
+    ctx.arc(cx, cy, 52, 0, math.tau)
+    ctx.set_line_width(2.5)
+    ctx.set_source_rgba(1.0, 0.95, 0.72, 0.76 * alpha)
     ctx.stroke()
 
     if text_alpha > 0:
@@ -273,9 +389,9 @@ def _make_surface(width, height, scale, title, subtitle, is_rare, progress):
         ctx.save()
         _rounded_rect(ctx, x, y, banner_w, banner_h, 48)
         ctx.clip()
-        _text(ctx, title, x + 145, y + 34, 27, (1, 1, 1, text_alpha), width=full_banner_w - 190)
+        _text(ctx, title, x + 158, y + 34, 27, (1, 1, 1, text_alpha), width=full_banner_w - 205)
         if subtitle:
-            _text(ctx, subtitle, x + 145, y + 67, 17, (0.98, 0.91, 0.78, 0.90 * text_alpha), Pango.Weight.NORMAL, full_banner_w - 190)
+            _text(ctx, subtitle, x + 158, y + 67, 17, (0.98, 0.91, 0.78, 0.90 * text_alpha), Pango.Weight.NORMAL, full_banner_w - 205)
         ctx.restore()
 
     surface.flush()
@@ -295,6 +411,16 @@ def main():
     subtitle = os.environ.get("SANSO_SUBTITLE", sys.argv[2] if len(sys.argv) > 2 else "")
     is_rare = os.environ.get("SANSO_RARE", "0") == "1"
     seconds = float(os.environ.get("SANSO_SECONDS", "5.8"))
+    icon_path = os.environ.get("SANSO_ICON_PATH", "")
+    size_percent = _clamp(float(os.environ.get("SANSO_SIZE_PERCENT", "50")), 0.0, 100.0)
+    if size_percent <= 0:
+        return
+    normal_start = _parse_color(os.environ.get("SANSO_NORMAL_GRADIENT_START"), (0.72, 0.42, 0.02, 0.94))
+    normal_end = _parse_color(os.environ.get("SANSO_NORMAL_GRADIENT_END"), (0.42, 0.22, 0.00, 0.94))
+    rare_start = _parse_color(os.environ.get("SANSO_RARE_GRADIENT_START"), (0.98, 0.78, 0.28, 0.95))
+    rare_end = _parse_color(os.environ.get("SANSO_RARE_GRADIENT_END"), (0.44, 0.30, 0.05, 0.95))
+    gradient_start = rare_start if is_rare else normal_start
+    gradient_end = rare_end if is_rare else normal_end
     width, height = _display_size()
 
     if not glfw.glfwInit():
@@ -332,12 +458,24 @@ def main():
         x11.XFlush(display)
 
         scale = _clamp(min(width / 1920, height / 1080), 0.85, 2.0)
-        card_width = int((930 + 34) * scale)
-        card_height = int((108 + 34) * scale)
+        overlay_scale = scale * (size_percent / 100.0)
+        card_width = int((930 + 34) * overlay_scale)
+        card_height = int((108 + 72) * overlay_scale)
         card_x = int((width - card_width) / 2)
-        card_y = int(height - card_height - (70 * scale))
+        card_y = int(height - card_height - (70 * overlay_scale))
 
-        surface = _make_surface(card_width, card_height, scale, title, subtitle, is_rare, 0.0)
+        surface = _make_surface(
+            card_width,
+            card_height,
+            overlay_scale,
+            title,
+            subtitle,
+            is_rare,
+            0.0,
+            icon_path,
+            gradient_start,
+            gradient_end,
+        )
         texture_buf = ctypes.create_string_buffer(bytes(surface.get_data()))
         tex = ctypes.c_uint()
         gl.glGenTextures(1, ctypes.byref(tex))
@@ -357,7 +495,18 @@ def main():
         )
 
         def draw_card(progress):
-            surface = _make_surface(card_width, card_height, scale, title, subtitle, is_rare, progress)
+            surface = _make_surface(
+                card_width,
+                card_height,
+                overlay_scale,
+                title,
+                subtitle,
+                is_rare,
+                progress,
+                icon_path,
+                gradient_start,
+                gradient_end,
+            )
             frame_buf = ctypes.create_string_buffer(bytes(surface.get_data()))
             gl.glBindTexture(GL_TEXTURE_2D, tex.value)
             gl.glTexImage2D(
@@ -373,7 +522,7 @@ def main():
             )
 
             _open_amount, alpha, _text_alpha, y_offset = _animation_state(progress)
-            y_shift = y_offset * scale
+            y_shift = y_offset * overlay_scale
 
             gl.glViewport(0, 0, width, height)
             gl.glClearColor(0, 0, 0, 0)

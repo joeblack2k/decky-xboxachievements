@@ -9,6 +9,9 @@ import {
   DropdownItem,
   PanelSection,
   PanelSectionRow,
+  SliderField,
+  ColorPickerModal,
+  showModal,
   staticClasses,
 } from "@decky/ui";
 import { useCallback, useEffect, useState } from "react";
@@ -60,6 +63,28 @@ type BackendStatus = {
 
 type DropdownSelection = {
   data: string;
+};
+
+type ColorSettingKey =
+  | "normal_gradient_start"
+  | "normal_gradient_end"
+  | "rare_gradient_start"
+  | "rare_gradient_end";
+
+const parseHsla = (value: string) => {
+  const match = value.match(
+    /hsla?\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)%\s*,\s*(\d+(?:\.\d+)?)%\s*(?:,\s*(\d+(?:\.\d+)?)\s*)?\)/i,
+  );
+  if (!match) {
+    return { h: 35, s: 98, l: 38, a: 0.94 };
+  }
+
+  return {
+    h: Number(match[1]),
+    s: Number(match[2]),
+    l: Number(match[3]),
+    a: match[4] ? Number(match[4]) : 1,
+  };
 };
 
 const toErrorMessage = (value: unknown): string => {
@@ -153,6 +178,50 @@ function StatusPanel() {
     [refreshStatus],
   );
 
+  const openColorPicker = useCallback(
+    (key: ColorSettingKey, title: string) => {
+      const color = parseHsla(settings[key]);
+      let modal: { Close: () => void } | undefined;
+      modal = showModal(
+        <ColorPickerModal
+          closeModal={() => modal?.Close()}
+          title={title}
+          defaultH={color.h}
+          defaultS={color.s}
+          defaultL={color.l}
+          defaultA={color.a}
+          onConfirm={(nextColor) => {
+            void updateSettings({ [key]: nextColor } as Partial<SansoSettings>);
+          }}
+        />,
+      );
+    },
+    [settings, updateSettings],
+  );
+
+  const colorButton = (key: ColorSettingKey, label: string) => (
+    <ButtonItem
+      disabled={pendingAction !== null}
+      onClick={() => openColorPicker(key, label)}
+      layout="below"
+      description={settings[key]}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+        <span>{label}</span>
+        <span
+          style={{
+            width: "42px",
+            height: "18px",
+            borderRadius: "999px",
+            background: settings[key],
+            border: "1px solid rgba(255,255,255,0.5)",
+            display: "inline-block",
+          }}
+        />
+      </div>
+    </ButtonItem>
+  );
+
   const soundOptions = sounds.map((sound) => ({ data: sound, label: sound }));
 
   const trigger = useCallback(
@@ -210,6 +279,38 @@ function StatusPanel() {
 
       <PanelSection title="Settings">
         <PanelSectionRow>
+          <SliderField
+            label="Popup size"
+            description="0% verbergt de banner; 50% is de huidige mooie maat."
+            value={settings.overlay_size_percent}
+            min={0}
+            max={100}
+            step={10}
+            notchCount={11}
+            showValue
+            valueSuffix="%"
+            disabled={pendingAction !== null}
+            onChange={(value) =>
+              void updateSettings({ overlay_size_percent: value })
+            }
+          />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <SliderField
+            label="Volume"
+            description="50% is het huidige volume; 0% is stil."
+            value={settings.volume_percent}
+            min={0}
+            max={100}
+            step={10}
+            notchCount={11}
+            showValue
+            valueSuffix="%"
+            disabled={pendingAction !== null}
+            onChange={(value) => void updateSettings({ volume_percent: value })}
+          />
+        </PanelSectionRow>
+        <PanelSectionRow>
           <DropdownItem
             label="Normal sound"
             description="WAV voor normale achievements."
@@ -232,6 +333,38 @@ function StatusPanel() {
               void updateSettings({ rare_sound: selection.data })
             }
           />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <div
+            style={{
+              height: "18px",
+              borderRadius: "999px",
+              background: `linear-gradient(90deg, ${settings.normal_gradient_start}, ${settings.normal_gradient_end})`,
+              border: "1px solid rgba(255,255,255,0.35)",
+            }}
+          />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          {colorButton("normal_gradient_start", "Normal gradient start")}
+        </PanelSectionRow>
+        <PanelSectionRow>
+          {colorButton("normal_gradient_end", "Normal gradient end")}
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <div
+            style={{
+              height: "18px",
+              borderRadius: "999px",
+              background: `linear-gradient(90deg, ${settings.rare_gradient_start}, ${settings.rare_gradient_end})`,
+              border: "1px solid rgba(255,255,255,0.35)",
+            }}
+          />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          {colorButton("rare_gradient_start", "Rare gradient start")}
+        </PanelSectionRow>
+        <PanelSectionRow>
+          {colorButton("rare_gradient_end", "Rare gradient end")}
         </PanelSectionRow>
       </PanelSection>
 
@@ -294,6 +427,9 @@ function StatusPanel() {
             <div>Theme: XBOX Achievement</div>
             <div>
               Sounds: {settings.normal_sound} / {settings.rare_sound}
+            </div>
+            <div>
+              Size/volume: {settings.overlay_size_percent}% / {settings.volume_percent}%
             </div>
             <div>Steamworks status: {status?.steamworks_status ?? "-"}</div>
             <div>Steamworks unlocks: {status?.steamworks_unlock_count ?? 0}</div>

@@ -9,6 +9,7 @@ import struct
 import subprocess
 import time
 import urllib.parse
+import urllib.request
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import decky
@@ -39,6 +40,7 @@ STEAM_ID64_BASE = 76561197960265728
 STEAM_WEB_API_KEY_ENV = "STEAM_WEB_API_KEY"
 SANSO_SETTINGS_DIR = "/home/deck/homebrew/settings/SANSO"
 SANSO_SETTINGS_FILE = os.path.join(SANSO_SETTINGS_DIR, "settings.json")
+SANSO_ICON_CACHE_DIR = os.path.join(SANSO_SETTINGS_DIR, "icon-cache")
 OLD_SETTINGS_DIR = "/home/deck/homebrew/settings/XboxAchievements"
 STEAM_WEB_API_KEY_FILES = [
     os.path.join(SANSO_SETTINGS_DIR, "steam_web_api_key"),
@@ -48,6 +50,12 @@ SOUNDS_DIR_NAME = "sounds"
 DEFAULT_SETTINGS = {
     "normal_sound": "unlock_preroll.wav",
     "rare_sound": "rare_preroll.wav",
+    "overlay_size_percent": 50,
+    "volume_percent": 50,
+    "normal_gradient_start": "hsla(35, 98%, 38%, 0.94)",
+    "normal_gradient_end": "hsla(30, 96%, 22%, 0.94)",
+    "rare_gradient_start": "hsla(43, 93%, 52%, 0.95)",
+    "rare_gradient_end": "hsla(35, 79%, 21%, 0.95)",
 }
 STEAM_API_TIMEOUT_SECONDS = 2.0
 STEAM_API_POLL_INTERVAL_SECONDS = 12.0
@@ -286,15 +294,45 @@ class Plugin:
                 continue
         return sorted(sounds, key=str.lower)
 
-    def _sanitize_settings(self, raw_settings: Dict[str, Any]) -> Dict[str, str]:
+    def _coerce_percent(self, value: Any, default: int) -> int:
+        try:
+            percent = int(round(float(value)))
+        except (TypeError, ValueError):
+            return default
+        return max(0, min(100, int(round(percent / 10) * 10)))
+
+    def _sanitize_color(self, value: Any, default: str) -> str:
+        if not isinstance(value, str):
+            return default
+
+        color = value.strip()
+        if re.fullmatch(
+            r"hsla?\(\s*\d{1,3}\s*,\s*\d{1,3}%\s*,\s*\d{1,3}%\s*(,\s*(0|1|0?\.\d+)\s*)?\)",
+            color,
+            re.IGNORECASE,
+        ):
+            return color
+        if re.fullmatch(r"#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?", color):
+            return color
+        return default
+
+    def _sanitize_settings(self, raw_settings: Dict[str, Any]) -> Dict[str, Any]:
         settings = dict(DEFAULT_SETTINGS)
-        settings.update(
-            {
-                key: value
-                for key, value in raw_settings.items()
-                if key in settings and isinstance(value, str)
-            }
-        )
+        for key in ["normal_sound", "rare_sound"]:
+            value = raw_settings.get(key)
+            if isinstance(value, str):
+                settings[key] = value
+
+        for key in ["overlay_size_percent", "volume_percent"]:
+            settings[key] = self._coerce_percent(raw_settings.get(key), int(settings[key]))
+
+        for key in [
+            "normal_gradient_start",
+            "normal_gradient_end",
+            "rare_gradient_start",
+            "rare_gradient_end",
+        ]:
+            settings[key] = self._sanitize_color(raw_settings.get(key), str(settings[key]))
 
         sounds = set(self._list_sound_files())
         for key in ["normal_sound", "rare_sound"]:
@@ -303,7 +341,7 @@ class Plugin:
 
         return settings
 
-    def _load_settings(self) -> Dict[str, str]:
+    def _load_settings(self) -> Dict[str, Any]:
         try:
             with open(SANSO_SETTINGS_FILE, "r", encoding="utf-8") as stream:
                 raw_settings = json.load(stream)
@@ -317,7 +355,7 @@ class Plugin:
             return dict(DEFAULT_SETTINGS)
         return self._sanitize_settings(raw_settings)
 
-    def _save_settings(self, settings: Dict[str, str]) -> None:
+    def _save_settings(self, settings: Dict[str, Any]) -> None:
         try:
             os.makedirs(self._settings_dir(), exist_ok=True)
             with open(SANSO_SETTINGS_FILE, "w", encoding="utf-8") as stream:
@@ -353,12 +391,80 @@ class Plugin:
 
         return env
 
+    def _icon_cache_path(self, appid: int, achievement_id: str, icon_url: str) -> str:
+        parsed = urllib.parse.urlparse(icon_url)
+        _, ext = os.path.splitext(parsed.path)
+        if ext.lower() not in [".jpg", ".jpeg", ".png", ".webp"]:
+            ext = ".img"
+        safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", achievement_id)[:96] or "achievement"
+        return os.path.join(SANSO_ICON_CACHE_DIR, f"{appid}-{safe_id}{ext.lower()}")
+
+    def _cache_icon(self, appid: Optional[int], achievement_id: Optional[str], icon_url: Optional[str]) -> Optional[str]:
+        if appid is None or not achievement_id or not icon_url:
+            return None
+
+        parsed = urllib.parse.urlparse(icon_url)
+        if parsed.scheme not in ("http", "https"):
+            return None
+
+        path = self._icon_cache_path(appid, achievement_id, icon_url)
+        if os.path.exists(path):
+            return path
+
+        try:
+            os.makedirs(SANSO_ICON_CACHE_DIR, exist_ok=True)
+            with urllib.request.urlopen(icon_url, timeout=3.0) as response:
+                data = response.read(3 * 1024 * 1024)
+            if not data:
+                return None
+            tmp_path = f"{path}.tmp"
+            with open(tmp_path, "wb") as stream:
+                stream.write(data)
+            os.replace(tmp_path, path)
+            return path
+        except Exception as err:
+            decky.logger.warning("Unable to cache achievement icon %s: %s", icon_url, err)
+            return None
+
+    def _achievement_icon_from_cache(self, appid: int, achievement_id: str) -> Optional[str]:
+        cache_path = self._librarycache_path_for_appid(appid)
+        if cache_path is None:
+            return None
+
+        try:
+            with open(cache_path, "r", encoding="utf-8", errors="ignore") as stream:
+                payload = json.load(stream)
+        except Exception:
+            return None
+
+        sections = self._sections_from_cache(payload)
+        achievements = sections.get("achievements")
+        if not isinstance(achievements, dict):
+            return None
+
+        for _section, values in self._achievement_lists(achievements):
+            for item in values:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("strID") != achievement_id:
+                    continue
+                icon_url = item.get("strImage")
+                if isinstance(icon_url, str) and icon_url:
+                    return icon_url
+        return None
+
     async def _play_sound(self, is_rare: bool) -> None:
         sound_path = self._sound_path(is_rare)
         if not os.path.exists(sound_path):
             decky.logger.warning("Sound file missing: %s", sound_path)
             return
 
+        settings = self._load_settings()
+        volume_percent = int(settings.get("volume_percent", DEFAULT_SETTINGS["volume_percent"]))
+        if volume_percent <= 0:
+            return
+
+        pulse_volume = max(0, min(131072, int(round((volume_percent / 50.0) * 65536))))
         env = self._build_audio_env()
 
         try:
@@ -368,6 +474,7 @@ class Plugin:
                     "--stream-name",
                     "SANSO",
                     "--property=media.role=event",
+                    f"--volume={pulse_volume}",
                     sound_path,
                 ],
                 env=env,
@@ -396,6 +503,12 @@ class Plugin:
             return
 
         async with self._gamescope_overlay_lock:
+            settings = self._load_settings()
+            if int(settings.get("overlay_size_percent", DEFAULT_SETTINGS["overlay_size_percent"])) <= 0:
+                self._gamescope_overlay_status = "hidden_size_zero"
+                self._gamescope_overlay_last_error = None
+                return
+
             env = os.environ.copy()
             env.update(
                 {
@@ -404,6 +517,12 @@ class Plugin:
                     "SANSO_TITLE": str(payload.get("title") or "Achievement Unlocked"),
                     "SANSO_SUBTITLE": str(payload.get("subtitle") or ""),
                     "SANSO_RARE": "1" if payload.get("is_rare") else "0",
+                    "SANSO_ICON_PATH": str(payload.get("icon_path") or ""),
+                    "SANSO_SIZE_PERCENT": str(settings.get("overlay_size_percent", 50)),
+                    "SANSO_NORMAL_GRADIENT_START": str(settings.get("normal_gradient_start")),
+                    "SANSO_NORMAL_GRADIENT_END": str(settings.get("normal_gradient_end")),
+                    "SANSO_RARE_GRADIENT_START": str(settings.get("rare_gradient_start")),
+                    "SANSO_RARE_GRADIENT_END": str(settings.get("rare_gradient_end")),
                     "SANSO_SECONDS": "5.8",
                 }
             )
@@ -469,17 +588,27 @@ class Plugin:
         line_hint: str,
         source: str,
         dedupe_key: str,
+        appid: Optional[int] = None,
+        achievement_id: Optional[str] = None,
+        icon_url: Optional[str] = None,
     ) -> None:
         if self._dedupe_emit(dedupe_key):
             return
 
         timestamp = dt.datetime.now(dt.timezone.utc).isoformat()
+        icon_path = await asyncio.to_thread(
+            self._cache_icon, appid, achievement_id, icon_url
+        )
 
         payload = {
             "title": title,
             "subtitle": subtitle,
             "is_rare": is_rare,
             "timestamp": timestamp,
+            "appid": appid,
+            "achievement_id": achievement_id,
+            "icon_url": icon_url,
+            "icon_path": icon_path,
         }
 
         asyncio.create_task(self._play_sound(is_rare))
@@ -952,6 +1081,7 @@ class Plugin:
             is_rare = isinstance(percent, (int, float)) and percent <= RARE_PERCENT_THRESHOLD
             title = "Rare Achievement Unlocked" if is_rare else "Achievement Unlocked"
             subtitle = name if not desc else f"{name} - {desc}"
+            icon_url = self._achievement_icon_from_cache(appid, achievement_id)
             self._steamworks_unlock_count += 1
             self._last_new_unlock_ids = [achievement_id]
             self._last_scanned_appid = appid
@@ -964,6 +1094,9 @@ class Plugin:
                 line_hint=f"appid={appid} id={achievement_id} name={name}",
                 source="steamworks_poll",
                 dedupe_key=f"achievement:{appid}:{achievement_id}",
+                appid=appid,
+                achievement_id=achievement_id,
+                icon_url=icon_url,
             )
 
     async def _watch_steamworks(self) -> None:
@@ -1198,6 +1331,7 @@ class Plugin:
 
         title = "Rare Achievement Unlocked" if is_rare else "Achievement Unlocked"
         subtitle = ach_name if not ach_desc else f"{ach_name} - {ach_desc}"
+        icon_url = self._achievement_icon_from_cache(appid, ach_id)
         self._steam_api_status = f"appid={appid}: new_unlocks_detected"
         await self._emit_notification(
             title=title,
@@ -1206,6 +1340,9 @@ class Plugin:
             line_hint=f"appid={appid} id={ach_id} name={ach_name}",
             source="steam_web_api",
             dedupe_key=f"achievement:{appid}:{ach_id}",
+            appid=appid,
+            achievement_id=ach_id,
+            icon_url=icon_url,
         )
 
     def _sections_from_cache(self, payload: Any) -> Dict[str, Any]:
@@ -1264,7 +1401,7 @@ class Plugin:
 
     def _parse_highlight(
         self, appid: int, achievements: Dict[str, Any], newly_unlocked: Set[str]
-    ) -> Optional[Tuple[str, str, bool, str, str]]:
+    ) -> Optional[Tuple[str, str, bool, str, str, Optional[str]]]:
         candidates: List[Dict[str, Any]] = []
         for item in self._achieved_items(achievements):
             aid = item.get("strID")
@@ -1291,7 +1428,15 @@ class Plugin:
         title = "Rare Achievement Unlocked" if is_rare else "Achievement Unlocked"
         subtitle = ach_name if not ach_desc else f"{ach_name} - {ach_desc}"
         hint = f"appid={appid} id={ach_id} name={ach_name}"
-        return title, subtitle, is_rare, hint, ach_id
+        icon_url = latest.get("strImage")
+        return (
+            title,
+            subtitle,
+            is_rare,
+            hint,
+            ach_id,
+            icon_url if isinstance(icon_url, str) and icon_url else None,
+        )
 
     def _latest_unlock_time(
         self, achievements: Dict[str, Any], newly_unlocked: Set[str]
@@ -1386,8 +1531,9 @@ class Plugin:
             is_rare = False
             hint = f"appid={appid} unlocked={','.join(sorted(newly_unlocked))}"
             dedupe_id = ",".join(sorted(newly_unlocked))
+            icon_url = None
         else:
-            title, subtitle, is_rare, hint, dedupe_id = parsed
+            title, subtitle, is_rare, hint, dedupe_id, icon_url = parsed
 
         await self._emit_notification(
             title=title,
@@ -1396,6 +1542,9 @@ class Plugin:
             line_hint=hint,
             source=source,
             dedupe_key=f"achievement:{appid}:{dedupe_id}",
+            appid=appid,
+            achievement_id=dedupe_id,
+            icon_url=icon_url,
         )
         return True
 
