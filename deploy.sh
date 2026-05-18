@@ -36,7 +36,7 @@ sshpass -p "${DECK_PASS}" rsync -az -e "${RSYNC_SSH}" \
 
 echo "[5/6] Fixing ownership..."
 sshpass -p "${DECK_PASS}" ssh ${SSH_OPTS} "${TARGET_HOST}" \
-  "echo '${DECK_PASS}' | sudo -S sh -c \"rm -rf '${TARGET_DIR}/san-themes' '${TARGET_DIR}/dist/san-themes'; chown -R deck:deck '${TARGET_DIR}'; if [ '${TARGET_DIR}' != '${OLD_TARGET_DIR}' ] && [ -d '${OLD_TARGET_DIR}' ]; then rm -rf '${OLD_TARGET_DIR}'; fi\""
+  "echo '${DECK_PASS}' | sudo -S sh -c \"rm -rf '${TARGET_DIR}/san-themes' '${TARGET_DIR}/dist/san-themes' '${TARGET_DIR}/__pycache__'; chown -R deck:deck '${TARGET_DIR}'; if [ '${TARGET_DIR}' != '${OLD_TARGET_DIR}' ] && [ -d '${OLD_TARGET_DIR}' ]; then rm -rf '${OLD_TARGET_DIR}'; fi\""
 
 if [[ "${RESTART_PLUGIN_LOADER}" == "1" ]]; then
   echo "[5b/6] Restarting plugin loader..."

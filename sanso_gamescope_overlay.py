@@ -107,6 +107,7 @@ def _configure_ctypes():
     gl.glMatrixMode.argtypes = (ctypes.c_uint,)
     gl.glLoadIdentity.restype = None
     gl.glOrtho.argtypes = (ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double)
+    gl.glColor4f.argtypes = (ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float)
     gl.glGenTextures.argtypes = (ctypes.c_int, ctypes.POINTER(ctypes.c_uint))
     gl.glBindTexture.argtypes = (ctypes.c_uint, ctypes.c_uint)
     gl.glTexParameteri.argtypes = (ctypes.c_uint, ctypes.c_uint, ctypes.c_int)
@@ -165,34 +166,68 @@ def _text(ctx, text, x, y, size, color, weight=Pango.Weight.BOLD, width=None):
     PangoCairo.show_layout(ctx, layout)
 
 
-def _make_surface(width, height, title, subtitle, is_rare):
+def _clamp(value, low, high):
+    return max(low, min(high, value))
+
+
+def _ease_out(value):
+    value = _clamp(value, 0.0, 1.0)
+    return 1 - (1 - value) ** 3
+
+
+def _ease_in(value):
+    value = _clamp(value, 0.0, 1.0)
+    return value ** 3
+
+
+def _animation_state(progress):
+    if progress < 0.22:
+        open_amount = _ease_out(progress / 0.22)
+        alpha = _ease_out(progress / 0.08)
+        y_offset = 20 * (1 - open_amount)
+    elif progress > 0.84:
+        close_amount = _ease_in((progress - 0.84) / 0.16)
+        open_amount = 1 - close_amount
+        alpha = 1 - close_amount
+        y_offset = 16 * close_amount
+    else:
+        open_amount = 1.0
+        alpha = 1.0
+        y_offset = 0.0
+    text_alpha = _clamp((open_amount - 0.55) / 0.45, 0.0, 1.0) * alpha
+    return open_amount, alpha, text_alpha, y_offset
+
+
+def _make_surface(width, height, scale, title, subtitle, is_rare, progress):
     surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
     ctx = cairo.Context(surface)
     ctx.set_operator(cairo.OPERATOR_CLEAR)
     ctx.paint()
     ctx.set_operator(cairo.OPERATOR_OVER)
 
-    scale = min(width / 1280, height / 800)
     logical_w = width / scale
     logical_h = height / scale
     ctx.scale(scale, scale)
 
-    banner_w = 930
+    open_amount, alpha, text_alpha, y_offset = _animation_state(progress)
+    full_banner_w = 930
+    start_w = 112
+    banner_w = start_w + (full_banner_w - start_w) * open_amount
     banner_h = 108
     x = (logical_w - banner_w) / 2
-    y = logical_h - banner_h - 78
-    main = (0.72, 0.42, 0.02, 0.96) if not is_rare else (0.44, 0.30, 0.05, 0.97)
-    accent = (1.00, 0.62, 0.02, 1.0) if not is_rare else (0.98, 0.78, 0.28, 1.0)
+    y = (logical_h - banner_h) / 2 + y_offset
+    main = (0.72, 0.42, 0.02, 0.94 * alpha) if not is_rare else (0.44, 0.30, 0.05, 0.95 * alpha)
+    accent = (1.00, 0.62, 0.02, alpha) if not is_rare else (0.98, 0.78, 0.28, alpha)
 
     _rounded_rect(ctx, x + 7, y + 8, banner_w, banner_h, 48)
-    ctx.set_source_rgba(0.03, 0.02, 0.00, 0.40)
+    ctx.set_source_rgba(0.03, 0.02, 0.00, 0.36 * alpha)
     ctx.fill()
 
     _rounded_rect(ctx, x, y, banner_w, banner_h, 48)
     ctx.set_source_rgba(*main)
     ctx.fill_preserve()
     ctx.set_line_width(2.2)
-    ctx.set_source_rgba(1.0, 0.93, 0.72, 0.90)
+    ctx.set_source_rgba(1.0, 0.93, 0.72, 0.86 * alpha)
     ctx.stroke()
 
     cx = x + 72
@@ -201,19 +236,19 @@ def _make_surface(width, height, title, subtitle, is_rare):
     ctx.set_source_rgba(*accent)
     ctx.fill_preserve()
     ctx.set_line_width(4)
-    ctx.set_source_rgba(0.56, 0.31, 0.00, 1)
+    ctx.set_source_rgba(0.56, 0.31, 0.00, alpha)
     ctx.stroke()
 
     ctx.arc(cx, cy, 39, 0, math.tau)
-    ctx.set_source_rgba(0.83, 1.0, 1.0, 1)
+    ctx.set_source_rgba(0.83, 1.0, 1.0, alpha)
     ctx.fill()
 
-    ctx.set_source_rgba(0.40, 0.48, 0.50, 1)
+    ctx.set_source_rgba(0.40, 0.48, 0.50, alpha)
     for i, pt in enumerate([(cx - 17, cy - 8), (cx - 7, cy - 19), (cx + 7, cy - 19), (cx + 17, cy - 8), (cx, cy + 19)]):
         (ctx.move_to if i == 0 else ctx.line_to)(*pt)
     ctx.close_path()
     ctx.fill()
-    ctx.set_source_rgba(0.85, 0.95, 0.96, 1)
+    ctx.set_source_rgba(0.85, 0.95, 0.96, alpha)
     ctx.set_line_width(3)
     ctx.move_to(cx - 17, cy - 8)
     ctx.line_to(cx + 17, cy - 8)
@@ -223,9 +258,25 @@ def _make_surface(width, height, title, subtitle, is_rare):
     ctx.line_to(cx, cy + 19)
     ctx.stroke()
 
-    _text(ctx, title, x + 145, y + 34, 27, (1, 1, 1, 1), width=banner_w - 190)
-    if subtitle:
-        _text(ctx, subtitle, x + 145, y + 67, 17, (0.98, 0.91, 0.78, 0.90), Pango.Weight.NORMAL, banner_w - 190)
+    if text_alpha > 0:
+        shine_x = x + 105 + (full_banner_w - 180) * _clamp((progress - 0.24) / 0.46, 0, 1)
+        ctx.save()
+        _rounded_rect(ctx, x, y, banner_w, banner_h, 48)
+        ctx.clip()
+        ctx.translate(shine_x, y - 10)
+        ctx.rotate(-0.28)
+        ctx.rectangle(-16, 0, 32, banner_h + 28)
+        ctx.set_source_rgba(1, 1, 1, 0.12 * text_alpha)
+        ctx.fill()
+        ctx.restore()
+
+        ctx.save()
+        _rounded_rect(ctx, x, y, banner_w, banner_h, 48)
+        ctx.clip()
+        _text(ctx, title, x + 145, y + 34, 27, (1, 1, 1, text_alpha), width=full_banner_w - 190)
+        if subtitle:
+            _text(ctx, subtitle, x + 145, y + 67, 17, (0.98, 0.91, 0.78, 0.90 * text_alpha), Pango.Weight.NORMAL, full_banner_w - 190)
+        ctx.restore()
 
     surface.flush()
     return surface
@@ -256,7 +307,7 @@ def main():
             (GLFW_STENCIL_BITS, 0),
             (GLFW_DECORATED, GLFW_FALSE),
             (GLFW_RESIZABLE, GLFW_TRUE),
-            (GLFW_VISIBLE, GLFW_TRUE),
+            (GLFW_VISIBLE, GLFW_FALSE),
             (GLFW_FLOATING, GLFW_TRUE),
             (GLFW_FOCUSED, GLFW_FALSE),
             (GLFW_FOCUS_ON_SHOW, GLFW_FALSE),
@@ -273,7 +324,6 @@ def main():
         glfw.glfwSetWindowPos(win, 0, 0)
         glfw.glfwMakeContextCurrent(win)
         glfw.glfwSwapInterval(1)
-        glfw.glfwShowWindow(win)
 
         display = glfw.glfwGetX11Display()
         xwin = glfw.glfwGetX11Window(win)
@@ -281,8 +331,14 @@ def main():
         _set_cardinal(display, xwin, "GAMESCOPE_NO_FOCUS", 1)
         x11.XFlush(display)
 
-        surface = _make_surface(width, height, title, subtitle, is_rare)
-        buf = surface.get_data()
+        scale = _clamp(min(width / 1920, height / 1080), 0.85, 2.0)
+        card_width = int((930 + 34) * scale)
+        card_height = int((108 + 34) * scale)
+        card_x = int((width - card_width) / 2)
+        card_y = int(height - card_height - (70 * scale))
+
+        surface = _make_surface(card_width, card_height, scale, title, subtitle, is_rare, 0.0)
+        texture_buf = ctypes.create_string_buffer(bytes(surface.get_data()))
         tex = ctypes.c_uint()
         gl.glGenTextures(1, ctypes.byref(tex))
         gl.glBindTexture(GL_TEXTURE_2D, tex.value)
@@ -292,16 +348,33 @@ def main():
             GL_TEXTURE_2D,
             0,
             GL_RGBA,
-            width,
-            height,
+            card_width,
+            card_height,
             0,
             GL_BGRA,
             GL_UNSIGNED_BYTE,
-            ctypes.c_void_p(ctypes.addressof(ctypes.c_char.from_buffer(buf))),
+            ctypes.cast(texture_buf, ctypes.c_void_p),
         )
 
-        deadline = time.time() + seconds
-        while time.time() < deadline:
+        def draw_card(progress):
+            surface = _make_surface(card_width, card_height, scale, title, subtitle, is_rare, progress)
+            frame_buf = ctypes.create_string_buffer(bytes(surface.get_data()))
+            gl.glBindTexture(GL_TEXTURE_2D, tex.value)
+            gl.glTexImage2D(
+                GL_TEXTURE_2D,
+                0,
+                GL_RGBA,
+                card_width,
+                card_height,
+                0,
+                GL_BGRA,
+                GL_UNSIGNED_BYTE,
+                ctypes.cast(frame_buf, ctypes.c_void_p),
+            )
+
+            _open_amount, alpha, _text_alpha, y_offset = _animation_state(progress)
+            y_shift = y_offset * scale
+
             gl.glViewport(0, 0, width, height)
             gl.glClearColor(0, 0, 0, 0)
             gl.glClear(GL_COLOR_BUFFER_BIT)
@@ -309,6 +382,7 @@ def main():
             gl.glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
             gl.glEnable(GL_TEXTURE_2D)
             gl.glBindTexture(GL_TEXTURE_2D, tex.value)
+            gl.glColor4f(1.0, 1.0, 1.0, alpha)
             gl.glMatrixMode(GL_PROJECTION)
             gl.glLoadIdentity()
             gl.glOrtho(0, width, height, 0, -1, 1)
@@ -316,16 +390,26 @@ def main():
             gl.glLoadIdentity()
             gl.glBegin(GL_QUADS)
             gl.glTexCoord2f(0, 0)
-            gl.glVertex2f(0, 0)
+            gl.glVertex2f(card_x, card_y + y_shift)
             gl.glTexCoord2f(1, 0)
-            gl.glVertex2f(width, 0)
+            gl.glVertex2f(card_x + card_width, card_y + y_shift)
             gl.glTexCoord2f(1, 1)
-            gl.glVertex2f(width, height)
+            gl.glVertex2f(card_x + card_width, card_y + card_height + y_shift)
             gl.glTexCoord2f(0, 1)
-            gl.glVertex2f(0, height)
+            gl.glVertex2f(card_x, card_y + card_height + y_shift)
             gl.glEnd()
             glfw.glfwSwapBuffers(win)
             glfw.glfwPollEvents()
+
+        draw_card(0.0)
+        glfw.glfwShowWindow(win)
+        x11.XFlush(display)
+
+        started_at = time.time()
+        deadline = started_at + seconds
+        while time.time() < deadline:
+            progress = _clamp((time.time() - started_at) / seconds, 0.0, 1.0)
+            draw_card(progress)
     finally:
         glfw.glfwTerminate()
 

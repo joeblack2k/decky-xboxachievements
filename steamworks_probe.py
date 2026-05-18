@@ -106,6 +106,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--appid", type=int, required=True)
     parser.add_argument("--poll-ms", type=int, default=100)
+    parser.add_argument("--baseline-ms", type=int, default=2500)
     parser.add_argument("--lib", default="/home/deck/.local/share/Steam/steamrt64/libsteam_api.so")
     args = parser.parse_args()
 
@@ -134,10 +135,19 @@ def main() -> int:
             return 3
 
         names = get_achievement_names(lib, stats)
-        previous = snapshot(lib, stats, names)
-        emit({"type": "ready", "appid": args.appid, "count": len(names)})
 
         interval = max(0.05, args.poll_ms / 1000.0)
+        baseline_deadline = time.monotonic() + max(0.0, args.baseline_ms / 1000.0)
+        previous = snapshot(lib, stats, names)
+        while time.monotonic() < baseline_deadline:
+            lib.SteamAPI_RunCallbacks()
+            current = snapshot(lib, stats, names)
+            if current:
+                previous = current
+            time.sleep(interval)
+
+        emit({"type": "ready", "appid": args.appid, "count": len(names)})
+
         while True:
             lib.SteamAPI_RunCallbacks()
             current = snapshot(lib, stats, names)

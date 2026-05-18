@@ -23,12 +23,14 @@ STEAMWORKS_LIB_PATH = "/home/deck/.local/share/Steam/steamrt64/libsteam_api.so"
 STEAMWORKS_HELPER_NAME = "steamworks_probe.py"
 SANSO_OVERLAY_HELPER_NAME = "sanso_gamescope_overlay.py"
 STEAMWORKS_PYTHON = "/usr/bin/python3"
+STALE_UNLOCK_GRACE_SECONDS = 15
 POLL_INTERVAL_SECONDS = 0.35
 CACHE_SCAN_INTERVAL_SECONDS = 1.5
 RECONCILIATION_SCAN_INTERVAL_SECONDS = 120.0
 INOTIFY_DEBOUNCE_SECONDS = 0.10
 STEAMWORKS_APPID_SCAN_INTERVAL_SECONDS = 1.0
 STEAMWORKS_POLL_INTERVAL_MS = 100
+STEAMWORKS_RESTART_COOLDOWN_SECONDS = 15.0
 DUPLICATE_WINDOW_SECONDS = 8.0
 RARE_PERCENT_THRESHOLD = 10.0
 SKIP_CACHE_FILES = {"achievement_progress.json"}
@@ -78,6 +80,7 @@ class Plugin:
         self._inotify_watches: Dict[int, Tuple[str, str]] = {}
         self._inotify_queue: Optional[asyncio.Queue[Dict[str, Any]]] = None
         self._stop_event = asyncio.Event()
+        self._started_at_epoch = time.time()
         self._watcher_running = False
         self._librarycache_running = False
         self._watcher_mode = "starting"
@@ -92,6 +95,7 @@ class Plugin:
         self._steamworks_last_appid: Optional[int] = None
         self._steamworks_last_process_pid: Optional[int] = None
         self._steamworks_unlock_count = 0
+        self._steamworks_last_start_monotonic = 0.0
         self._last_inotify_event_path: Optional[str] = None
         self._last_inotify_event_appid: Optional[int] = None
         self._last_queue_latency_ms: Optional[float] = None
@@ -882,6 +886,7 @@ class Plugin:
         self._steamworks_process = process
         self._steamworks_last_appid = appid
         self._steamworks_last_process_pid = process.pid
+        self._steamworks_last_start_monotonic = time.monotonic()
         self._steamworks_status = "started"
         self._steamworks_running = True
         self._steamworks_reader_task = asyncio.create_task(
@@ -963,7 +968,6 @@ class Plugin:
 
     async def _watch_steamworks(self) -> None:
         active_appid: Optional[int] = None
-        active_start_ticks: Optional[int] = None
 
         while not self._stop_event.is_set():
             try:
@@ -972,23 +976,32 @@ class Plugin:
                     if active_appid is not None:
                         self._stop_steamworks_process()
                     active_appid = None
-                    active_start_ticks = None
                     self._steamworks_running = False
                     self._steamworks_status = "idle_no_running_game"
                 else:
-                    appid, start_ticks = detected
+                    appid, _start_ticks = detected
                     process = self._steamworks_process
                     process_dead = process is not None and process.returncode is not None
+                    cooldown_active = (
+                        process_dead
+                        and appid == active_appid
+                        and time.monotonic() - self._steamworks_last_start_monotonic
+                        < STEAMWORKS_RESTART_COOLDOWN_SECONDS
+                    )
                     if (
-                        appid != active_appid
-                        or start_ticks != active_start_ticks
-                        or process is None
-                        or process_dead
+                        not cooldown_active
+                        and (
+                            appid != active_appid
+                            or process is None
+                            or process_dead
+                        )
                     ):
                         active_appid = appid
-                        active_start_ticks = start_ticks
                         self._steamworks_last_process_pid = None
                         await self._start_steamworks_process(appid)
+                    elif cooldown_active:
+                        self._steamworks_running = False
+                        self._steamworks_status = "restart_cooldown"
 
                 await asyncio.sleep(STEAMWORKS_APPID_SCAN_INTERVAL_SECONDS)
             except asyncio.CancelledError:
@@ -1280,6 +1293,30 @@ class Plugin:
         hint = f"appid={appid} id={ach_id} name={ach_name}"
         return title, subtitle, is_rare, hint, ach_id
 
+    def _latest_unlock_time(
+        self, achievements: Dict[str, Any], newly_unlocked: Set[str]
+    ) -> Optional[int]:
+        unlock_times: List[int] = []
+        for item in self._achieved_items(achievements):
+            aid = item.get("strID")
+            if not isinstance(aid, str) or aid not in newly_unlocked:
+                continue
+            try:
+                unlocked_at = int(item.get("rtUnlocked") or 0)
+            except (TypeError, ValueError):
+                continue
+            if unlocked_at > 0:
+                unlock_times.append(unlocked_at)
+        return max(unlock_times) if unlock_times else None
+
+    def _is_stale_cache_unlock(
+        self, achievements: Dict[str, Any], newly_unlocked: Set[str]
+    ) -> bool:
+        latest_unlock_time = self._latest_unlock_time(achievements, newly_unlocked)
+        if latest_unlock_time is None:
+            return False
+        return latest_unlock_time < self._started_at_epoch - STALE_UNLOCK_GRACE_SECONDS
+
     async def _prime_librarycache_state(self) -> None:
         for path in self._iter_librarycache_files():
             await self._process_librarycache_file(path, emit=False)
@@ -1337,6 +1374,10 @@ class Plugin:
             return True
 
         self._last_new_unlock_ids = sorted(newly_unlocked)
+        if self._is_stale_cache_unlock(achievements, newly_unlocked):
+            self._last_cache_status = "stale_unlock_suppressed"
+            return True
+
         self._last_cache_status = "new_unlocks_detected"
         parsed = self._parse_highlight(appid, achievements, newly_unlocked)
         if parsed is None:
