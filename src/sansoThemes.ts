@@ -13,6 +13,8 @@ export type SansoSettings = {
   normal_gradient_end: string;
   rare_gradient_start: string;
   rare_gradient_end: string;
+  normal_circle_color: string;
+  rare_circle_color: string;
 };
 
 export type NotificationPayload = {
@@ -35,4 +37,6 @@ export const DEFAULT_SETTINGS: SansoSettings = {
   normal_gradient_end: "hsla(30, 96%, 22%, 0.94)",
   rare_gradient_start: "hsla(43, 93%, 52%, 0.95)",
   rare_gradient_end: "hsla(35, 79%, 21%, 0.95)",
+  normal_circle_color: "hsla(37, 100%, 51%, 1)",
+  rare_circle_color: "hsla(43, 93%, 62%, 1)",
 };

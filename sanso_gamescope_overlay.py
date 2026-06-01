@@ -284,7 +284,7 @@ def _draw_icon(ctx, icon_path, cx, cy, radius, alpha):
             icon_path,
             int(radius * 2),
             int(radius * 2),
-            True,
+            False,
         )
         ctx.save()
         ctx.arc(cx, cy, radius, 0, math.tau)
@@ -307,6 +307,7 @@ def _make_surface(
     icon_path,
     gradient_start,
     gradient_end,
+    circle_color,
 ):
     surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
     ctx = cairo.Context(surface)
@@ -325,7 +326,7 @@ def _make_surface(
     banner_h = 108
     x = (logical_w - banner_w) / 2 + (_rare_slide(progress) if is_rare else 0)
     y = (logical_h - banner_h) / 2 + y_offset
-    accent = (1.00, 0.62, 0.02, alpha) if not is_rare else (0.98, 0.78, 0.28, alpha)
+    accent = _color_with_alpha(circle_color, alpha)
 
     _rounded_rect(ctx, x + 7, y + 8, banner_w, banner_h, 48)
     ctx.set_source_rgba(0.03, 0.02, 0.00, 0.36 * alpha)
@@ -419,8 +420,11 @@ def main():
     normal_end = _parse_color(os.environ.get("SANSO_NORMAL_GRADIENT_END"), (0.42, 0.22, 0.00, 0.94))
     rare_start = _parse_color(os.environ.get("SANSO_RARE_GRADIENT_START"), (0.98, 0.78, 0.28, 0.95))
     rare_end = _parse_color(os.environ.get("SANSO_RARE_GRADIENT_END"), (0.44, 0.30, 0.05, 0.95))
+    normal_circle = _parse_color(os.environ.get("SANSO_NORMAL_CIRCLE_COLOR"), (1.00, 0.62, 0.02, 1.0))
+    rare_circle = _parse_color(os.environ.get("SANSO_RARE_CIRCLE_COLOR"), (0.98, 0.78, 0.28, 1.0))
     gradient_start = rare_start if is_rare else normal_start
     gradient_end = rare_end if is_rare else normal_end
+    circle_color = rare_circle if is_rare else normal_circle
     width, height = _display_size()
 
     if not glfw.glfwInit():
@@ -475,6 +479,7 @@ def main():
             icon_path,
             gradient_start,
             gradient_end,
+            circle_color,
         )
         texture_buf = ctypes.create_string_buffer(bytes(surface.get_data()))
         tex = ctypes.c_uint()
@@ -506,6 +511,7 @@ def main():
                 icon_path,
                 gradient_start,
                 gradient_end,
+                circle_color,
             )
             frame_buf = ctypes.create_string_buffer(bytes(surface.get_data()))
             gl.glBindTexture(GL_TEXTURE_2D, tex.value)

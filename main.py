@@ -2,6 +2,7 @@ import asyncio
 import ctypes
 import datetime as dt
 import glob
+import hashlib
 import json
 import os
 import re
@@ -56,6 +57,8 @@ DEFAULT_SETTINGS = {
     "normal_gradient_end": "hsla(30, 96%, 22%, 0.94)",
     "rare_gradient_start": "hsla(43, 93%, 52%, 0.95)",
     "rare_gradient_end": "hsla(35, 79%, 21%, 0.95)",
+    "normal_circle_color": "hsla(37, 100%, 51%, 1)",
+    "rare_circle_color": "hsla(43, 93%, 62%, 1)",
 }
 STEAM_API_TIMEOUT_SECONDS = 2.0
 STEAM_API_POLL_INTERVAL_SECONDS = 12.0
@@ -128,6 +131,7 @@ class Plugin:
         self._steam_api_known_unlocked: Dict[int, Set[str]] = {}
         self._steam_api_percent_cache: Dict[int, Dict[str, float]] = {}
         self._recent_emit_keys: Dict[str, float] = {}
+        self._emitted_achievement_keys: Set[str] = set()
         self._gamescope_overlay_lock = asyncio.Lock()
         self._gamescope_overlay_status: Optional[str] = None
         self._gamescope_overlay_last_error: Optional[str] = None
@@ -331,6 +335,8 @@ class Plugin:
             "normal_gradient_end",
             "rare_gradient_start",
             "rare_gradient_end",
+            "normal_circle_color",
+            "rare_circle_color",
         ]:
             settings[key] = self._sanitize_color(raw_settings.get(key), str(settings[key]))
 
@@ -397,7 +403,57 @@ class Plugin:
         if ext.lower() not in [".jpg", ".jpeg", ".png", ".webp"]:
             ext = ".img"
         safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", achievement_id)[:96] or "achievement"
-        return os.path.join(SANSO_ICON_CACHE_DIR, f"{appid}-{safe_id}{ext.lower()}")
+        id_hash = hashlib.sha1(achievement_id.encode("utf-8")).hexdigest()[:10]
+        return os.path.join(SANSO_ICON_CACHE_DIR, f"{appid}-{safe_id}-{id_hash}{ext.lower()}")
+
+    def _icon_cache_meta_path(self, icon_path: str) -> str:
+        return f"{icon_path}.json"
+
+    def _cached_icon_matches(self, icon_path: str, icon_url: str) -> bool:
+        if not os.path.exists(icon_path):
+            return False
+        try:
+            with open(self._icon_cache_meta_path(icon_path), "r", encoding="utf-8") as stream:
+                metadata = json.load(stream)
+        except Exception:
+            return False
+        return isinstance(metadata, dict) and metadata.get("icon_url") == icon_url
+
+    def _download_icon_bytes(self, icon_url: str) -> bytes:
+        try:
+            with urllib.request.urlopen(icon_url, timeout=3.0) as response:
+                data = response.read(3 * 1024 * 1024)
+            if data:
+                return data
+        except Exception as err:
+            decky.logger.warning("Python icon download failed for %s: %s", icon_url, err)
+
+        env = os.environ.copy()
+        env.pop("LD_LIBRARY_PATH", None)
+        env.pop("LD_PRELOAD", None)
+        result = subprocess.run(
+            [
+                "curl",
+                "--fail",
+                "--silent",
+                "--show-error",
+                "--location",
+                "--max-time",
+                "3",
+                "--user-agent",
+                "SANSO/1.0",
+                icon_url,
+            ],
+            text=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            check=False,
+        )
+        if result.returncode != 0 or not result.stdout:
+            stderr = result.stderr.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(f"curl failed ({result.returncode}): {stderr}")
+        return result.stdout[: 3 * 1024 * 1024]
 
     def _cache_icon(self, appid: Optional[int], achievement_id: Optional[str], icon_url: Optional[str]) -> Optional[str]:
         if appid is None or not achievement_id or not icon_url:
@@ -408,22 +464,37 @@ class Plugin:
             return None
 
         path = self._icon_cache_path(appid, achievement_id, icon_url)
-        if os.path.exists(path):
+        if self._cached_icon_matches(path, icon_url):
             return path
 
         try:
             os.makedirs(SANSO_ICON_CACHE_DIR, exist_ok=True)
-            with urllib.request.urlopen(icon_url, timeout=3.0) as response:
-                data = response.read(3 * 1024 * 1024)
-            if not data:
-                return None
+            data = self._download_icon_bytes(icon_url)
+        except Exception as err:
+            decky.logger.warning("Unable to cache achievement icon %s: %s", icon_url, err)
+            return None
+
+        try:
             tmp_path = f"{path}.tmp"
             with open(tmp_path, "wb") as stream:
                 stream.write(data)
             os.replace(tmp_path, path)
+            meta_tmp_path = f"{self._icon_cache_meta_path(path)}.tmp"
+            with open(meta_tmp_path, "w", encoding="utf-8") as stream:
+                json.dump(
+                    {
+                        "appid": appid,
+                        "achievement_id": achievement_id,
+                        "icon_url": icon_url,
+                    },
+                    stream,
+                    indent=2,
+                    sort_keys=True,
+                )
+            os.replace(meta_tmp_path, self._icon_cache_meta_path(path))
             return path
-        except Exception as err:
-            decky.logger.warning("Unable to cache achievement icon %s: %s", icon_url, err)
+        except OSError as err:
+            decky.logger.warning("Unable to store achievement icon %s: %s", icon_url, err)
             return None
 
     def _achievement_icon_from_cache(self, appid: int, achievement_id: str) -> Optional[str]:
@@ -523,6 +594,8 @@ class Plugin:
                     "SANSO_NORMAL_GRADIENT_END": str(settings.get("normal_gradient_end")),
                     "SANSO_RARE_GRADIENT_START": str(settings.get("rare_gradient_start")),
                     "SANSO_RARE_GRADIENT_END": str(settings.get("rare_gradient_end")),
+                    "SANSO_NORMAL_CIRCLE_COLOR": str(settings.get("normal_circle_color")),
+                    "SANSO_RARE_CIRCLE_COLOR": str(settings.get("rare_circle_color")),
                     "SANSO_SECONDS": "5.8",
                 }
             )
@@ -592,8 +665,16 @@ class Plugin:
         achievement_id: Optional[str] = None,
         icon_url: Optional[str] = None,
     ) -> None:
+        achievement_key = None
+        if appid is not None and achievement_id:
+            achievement_key = f"{appid}:{achievement_id}"
+            if achievement_key in self._emitted_achievement_keys:
+                return
+
         if self._dedupe_emit(dedupe_key):
             return
+        if achievement_key is not None:
+            self._emitted_achievement_keys.add(achievement_key)
 
         timestamp = dt.datetime.now(dt.timezone.utc).isoformat()
         icon_path = await asyncio.to_thread(
@@ -1079,8 +1160,8 @@ class Plugin:
             desc = str(event.get("desc") or "").strip()
             percent = event.get("percent")
             is_rare = isinstance(percent, (int, float)) and percent <= RARE_PERCENT_THRESHOLD
-            title = "Rare Achievement Unlocked" if is_rare else "Achievement Unlocked"
-            subtitle = name if not desc else f"{name} - {desc}"
+            title = name
+            subtitle = desc
             icon_url = self._achievement_icon_from_cache(appid, achievement_id)
             self._steamworks_unlock_count += 1
             self._last_new_unlock_ids = [achievement_id]
@@ -1329,8 +1410,8 @@ class Plugin:
         except Exception as err:
             self._steam_api_last_error = f"rarity lookup failed: {err}"
 
-        title = "Rare Achievement Unlocked" if is_rare else "Achievement Unlocked"
-        subtitle = ach_name if not ach_desc else f"{ach_name} - {ach_desc}"
+        title = ach_name
+        subtitle = ach_desc
         icon_url = self._achievement_icon_from_cache(appid, ach_id)
         self._steam_api_status = f"appid={appid}: new_unlocks_detected"
         await self._emit_notification(
@@ -1425,8 +1506,8 @@ class Plugin:
         if isinstance(rarity_value, (int, float)):
             is_rare = float(rarity_value) <= RARE_PERCENT_THRESHOLD
 
-        title = "Rare Achievement Unlocked" if is_rare else "Achievement Unlocked"
-        subtitle = ach_name if not ach_desc else f"{ach_name} - {ach_desc}"
+        title = ach_name
+        subtitle = ach_desc
         hint = f"appid={appid} id={ach_id} name={ach_name}"
         icon_url = latest.get("strImage")
         return (
