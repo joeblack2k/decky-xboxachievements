@@ -69,7 +69,9 @@ type ColorSettingKey =
   | "normal_gradient_start"
   | "normal_gradient_end"
   | "rare_gradient_start"
-  | "rare_gradient_end";
+  | "rare_gradient_end"
+  | "normal_circle_color"
+  | "rare_circle_color";
 
 const parseHsla = (value: string) => {
   const match = value.match(
@@ -250,7 +252,7 @@ function StatusPanel() {
             disabled={pendingAction !== null}
             onClick={() => void trigger("test_popup_main")}
             layout="below"
-            description="Toont de standaard Xbox achievement popup."
+            description="Shows the standard Xbox-style achievement popup."
           >
             Test Main
           </ButtonItem>
@@ -260,7 +262,7 @@ function StatusPanel() {
             disabled={pendingAction !== null}
             onClick={() => void trigger("test_xbox_popup")}
             layout="below"
-            description="Toont de XBOX Achievement popup via de in-game gamescope overlay."
+            description="Shows the Xbox-style popup through the in-game Gamescope overlay."
           >
             Test XBOX Popup
           </ButtonItem>
@@ -270,7 +272,7 @@ function StatusPanel() {
             disabled={pendingAction !== null}
             onClick={() => void trigger("test_popup_rare")}
             layout="below"
-            description="Toont de rare-variant met glow en rare geluid."
+            description="Shows the rare variant with glow and the rare sound."
           >
             Test Rare
           </ButtonItem>
@@ -281,7 +283,7 @@ function StatusPanel() {
         <PanelSectionRow>
           <SliderField
             label="Popup size"
-            description="0% verbergt de banner; 50% is de huidige mooie maat."
+            description="0% hides the banner; 50% is the default size."
             value={settings.overlay_size_percent}
             min={0}
             max={100}
@@ -298,7 +300,7 @@ function StatusPanel() {
         <PanelSectionRow>
           <SliderField
             label="Volume"
-            description="50% is het huidige volume; 0% is stil."
+            description="50% is the default volume; 0% is silent."
             value={settings.volume_percent}
             min={0}
             max={100}
@@ -313,7 +315,7 @@ function StatusPanel() {
         <PanelSectionRow>
           <DropdownItem
             label="Normal sound"
-            description="WAV voor normale achievements."
+            description="WAV file for normal achievements."
             rgOptions={soundOptions}
             selectedOption={settings.normal_sound}
             disabled={pendingAction !== null || soundOptions.length === 0}
@@ -325,7 +327,7 @@ function StatusPanel() {
         <PanelSectionRow>
           <DropdownItem
             label="Rare sound"
-            description="WAV voor rare achievements."
+            description="WAV file for rare achievements."
             rgOptions={soundOptions}
             selectedOption={settings.rare_sound}
             disabled={pendingAction !== null || soundOptions.length === 0}
@@ -366,6 +368,12 @@ function StatusPanel() {
         <PanelSectionRow>
           {colorButton("rare_gradient_end", "Rare gradient end")}
         </PanelSectionRow>
+        <PanelSectionRow>
+          {colorButton("normal_circle_color", "Normal circle color")}
+        </PanelSectionRow>
+        <PanelSectionRow>
+          {colorButton("rare_circle_color", "Rare circle color")}
+        </PanelSectionRow>
       </PanelSection>
 
       <PanelSection title="Watcher Status">
@@ -373,7 +381,7 @@ function StatusPanel() {
           <ButtonItem
             disabled={pendingAction !== null}
             onClick={() => void refreshStatus()}
-            description="Handmatige refresh van backend status."
+            description="Manually refresh backend status."
           >
             Refresh Status
           </ButtonItem>
