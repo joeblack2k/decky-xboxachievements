@@ -2,6 +2,7 @@ import asyncio
 import ctypes
 import datetime as dt
 import glob
+import hashlib
 import json
 import os
 import re
@@ -402,7 +403,21 @@ class Plugin:
         if ext.lower() not in [".jpg", ".jpeg", ".png", ".webp"]:
             ext = ".img"
         safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", achievement_id)[:96] or "achievement"
-        return os.path.join(SANSO_ICON_CACHE_DIR, f"{appid}-{safe_id}{ext.lower()}")
+        id_hash = hashlib.sha1(achievement_id.encode("utf-8")).hexdigest()[:10]
+        return os.path.join(SANSO_ICON_CACHE_DIR, f"{appid}-{safe_id}-{id_hash}{ext.lower()}")
+
+    def _icon_cache_meta_path(self, icon_path: str) -> str:
+        return f"{icon_path}.json"
+
+    def _cached_icon_matches(self, icon_path: str, icon_url: str) -> bool:
+        if not os.path.exists(icon_path):
+            return False
+        try:
+            with open(self._icon_cache_meta_path(icon_path), "r", encoding="utf-8") as stream:
+                metadata = json.load(stream)
+        except Exception:
+            return False
+        return isinstance(metadata, dict) and metadata.get("icon_url") == icon_url
 
     def _download_icon_bytes(self, icon_url: str) -> bytes:
         try:
@@ -449,7 +464,7 @@ class Plugin:
             return None
 
         path = self._icon_cache_path(appid, achievement_id, icon_url)
-        if os.path.exists(path):
+        if self._cached_icon_matches(path, icon_url):
             return path
 
         try:
@@ -464,6 +479,19 @@ class Plugin:
             with open(tmp_path, "wb") as stream:
                 stream.write(data)
             os.replace(tmp_path, path)
+            meta_tmp_path = f"{self._icon_cache_meta_path(path)}.tmp"
+            with open(meta_tmp_path, "w", encoding="utf-8") as stream:
+                json.dump(
+                    {
+                        "appid": appid,
+                        "achievement_id": achievement_id,
+                        "icon_url": icon_url,
+                    },
+                    stream,
+                    indent=2,
+                    sort_keys=True,
+                )
+            os.replace(meta_tmp_path, self._icon_cache_meta_path(path))
             return path
         except OSError as err:
             decky.logger.warning("Unable to store achievement icon %s: %s", icon_url, err)
