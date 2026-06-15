@@ -2,6 +2,7 @@ import asyncio
 import ctypes
 import datetime as dt
 import glob
+import hashlib
 import json
 import os
 import re
@@ -63,6 +64,7 @@ STEAM_API_TIMEOUT_SECONDS = 2.0
 STEAM_API_POLL_INTERVAL_SECONDS = 12.0
 STEAM_API_RECENT_GAME_LIMIT = 2
 STEAM_API_BASE_URL = "https://api.steampowered.com"
+ICON_RESOLVE_RETRY_DELAYS_SECONDS = (0.35, 0.8, 1.5)
 IN_CLOSE_WRITE = 0x00000008
 IN_ATTRIB = 0x00000004
 IN_MODIFY = 0x00000002
@@ -129,6 +131,7 @@ class Plugin:
         self._known_unlocked: Dict[int, Set[str]] = {}
         self._steam_api_known_unlocked: Dict[int, Set[str]] = {}
         self._steam_api_percent_cache: Dict[int, Dict[str, float]] = {}
+        self._steam_api_icon_cache: Dict[int, Dict[str, str]] = {}
         self._recent_emit_keys: Dict[str, float] = {}
         self._emitted_achievement_keys: Set[str] = set()
         self._gamescope_overlay_lock = asyncio.Lock()
@@ -402,7 +405,21 @@ class Plugin:
         if ext.lower() not in [".jpg", ".jpeg", ".png", ".webp"]:
             ext = ".img"
         safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", achievement_id)[:96] or "achievement"
-        return os.path.join(SANSO_ICON_CACHE_DIR, f"{appid}-{safe_id}{ext.lower()}")
+        id_hash = hashlib.sha1(achievement_id.encode("utf-8")).hexdigest()[:10]
+        return os.path.join(SANSO_ICON_CACHE_DIR, f"{appid}-{safe_id}-{id_hash}{ext.lower()}")
+
+    def _icon_cache_meta_path(self, icon_path: str) -> str:
+        return f"{icon_path}.json"
+
+    def _cached_icon_matches(self, icon_path: str, icon_url: str) -> bool:
+        if not os.path.exists(icon_path):
+            return False
+        try:
+            with open(self._icon_cache_meta_path(icon_path), "r", encoding="utf-8") as stream:
+                metadata = json.load(stream)
+        except Exception:
+            return False
+        return isinstance(metadata, dict) and metadata.get("icon_url") == icon_url
 
     def _download_icon_bytes(self, icon_url: str) -> bytes:
         try:
@@ -449,7 +466,7 @@ class Plugin:
             return None
 
         path = self._icon_cache_path(appid, achievement_id, icon_url)
-        if os.path.exists(path):
+        if self._cached_icon_matches(path, icon_url):
             return path
 
         try:
@@ -464,6 +481,19 @@ class Plugin:
             with open(tmp_path, "wb") as stream:
                 stream.write(data)
             os.replace(tmp_path, path)
+            meta_tmp_path = f"{self._icon_cache_meta_path(path)}.tmp"
+            with open(meta_tmp_path, "w", encoding="utf-8") as stream:
+                json.dump(
+                    {
+                        "appid": appid,
+                        "achievement_id": achievement_id,
+                        "icon_url": icon_url,
+                    },
+                    stream,
+                    indent=2,
+                    sort_keys=True,
+                )
+            os.replace(meta_tmp_path, self._icon_cache_meta_path(path))
             return path
         except OSError as err:
             decky.logger.warning("Unable to store achievement icon %s: %s", icon_url, err)
@@ -494,6 +524,75 @@ class Plugin:
                 icon_url = item.get("strImage")
                 if isinstance(icon_url, str) and icon_url:
                     return icon_url
+        return None
+
+    async def _steam_api_schema_icons(self, appid: int) -> Dict[str, str]:
+        cached = self._steam_api_icon_cache.get(appid)
+        if cached is not None:
+            return cached
+
+        params: Dict[str, Any] = {"appid": appid, "format": "json"}
+        key = self._steam_api_key()
+        if key:
+            params["key"] = key
+
+        payload = await self._steam_api_json(
+            "/ISteamUserStats/GetSchemaForGame/v2/",
+            params,
+        )
+        achievements = (
+            payload.get("game", {})
+            .get("availableGameStats", {})
+            .get("achievements", [])
+        )
+
+        icons: Dict[str, str] = {}
+        if isinstance(achievements, list):
+            for item in achievements:
+                if not isinstance(item, dict):
+                    continue
+                achievement_id = item.get("name")
+                icon_url = item.get("icon")
+                if isinstance(achievement_id, str) and isinstance(icon_url, str) and icon_url:
+                    icons[achievement_id] = icon_url
+
+        self._steam_api_icon_cache[appid] = icons
+        return icons
+
+    async def _achievement_icon_from_schema(
+        self, appid: int, achievement_id: str
+    ) -> Optional[str]:
+        try:
+            icons = await self._steam_api_schema_icons(appid)
+        except Exception as err:
+            self._steam_api_last_error = f"icon schema lookup failed: {err}"
+            return None
+        return icons.get(achievement_id)
+
+    async def _resolve_achievement_icon_url(
+        self,
+        appid: Optional[int],
+        achievement_id: Optional[str],
+        preferred_icon_url: Optional[str],
+    ) -> Optional[str]:
+        if appid is None or not achievement_id:
+            return preferred_icon_url
+
+        schema_icon_url = await self._achievement_icon_from_schema(appid, achievement_id)
+        if schema_icon_url:
+            return schema_icon_url
+
+        if preferred_icon_url:
+            return preferred_icon_url
+
+        for delay in ICON_RESOLVE_RETRY_DELAYS_SECONDS:
+            await asyncio.sleep(delay)
+            icon_url = await asyncio.to_thread(
+                self._achievement_icon_from_cache, appid, achievement_id
+            )
+            if icon_url:
+                return icon_url
+
         return None
 
     async def _play_sound(self, is_rare: bool) -> None:
@@ -649,8 +748,11 @@ class Plugin:
             self._emitted_achievement_keys.add(achievement_key)
 
         timestamp = dt.datetime.now(dt.timezone.utc).isoformat()
+        resolved_icon_url = await self._resolve_achievement_icon_url(
+            appid, achievement_id, icon_url
+        )
         icon_path = await asyncio.to_thread(
-            self._cache_icon, appid, achievement_id, icon_url
+            self._cache_icon, appid, achievement_id, resolved_icon_url
         )
 
         payload = {
@@ -660,7 +762,7 @@ class Plugin:
             "timestamp": timestamp,
             "appid": appid,
             "achievement_id": achievement_id,
-            "icon_url": icon_url,
+            "icon_url": resolved_icon_url,
             "icon_path": icon_path,
         }
 
